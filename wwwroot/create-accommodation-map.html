@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tạo cơ sở lưu trú với bản đồ</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0 auto; padding: 16px; max-width: 980px; }
+    h1 { font-size: 20px; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 8px; }
+    .row-1 { display: grid; grid-template-columns: 1fr; gap: 12px; margin-bottom: 8px; }
+    label { font-size: 12px; color: #444; }
+    input, textarea, select { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 6px; }
+    #map { height: 420px; border: 1px solid #ddd; border-radius: 6px; }
+    .actions { display: flex; gap: 8px; margin-top: 12px; }
+    button { padding: 10px 14px; border: 0; border-radius: 6px; background: #0a7; color: #fff; cursor: pointer; }
+    .muted { color: #666; font-size: 13px; }
+    .info { background:#eefbf4; color:#065f46; padding:8px 10px; border-radius:6px; border:1px solid #b7f0d3; margin:10px 0; }
+    .error { background:#fde8e8; color:#9b1c1c; padding:8px 10px; border-radius:6px; border:1px solid #f5b5b5; margin:10px 0; }
+    img.preview { max-width: 220px; height: auto; border-radius: 6px; border: 1px solid #eee; }
+  </style>
+</head>
+<body>
+  <h1>Tạo cơ sở lưu trú với bản đồ</h1>
+  <div class="info">Trang demo chạy trực tiếp từ API (wwwroot). Cần token của tài khoản có quyền <b>ChuCoSo</b> để tạo.</div>
+
+  <div class="row-1">
+    <div>
+      <label>JWT Token (Bearer)</label>
+      <input id="token" placeholder="Dán token vào đây (tùy chọn nếu API công khai)" />
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <label>Tên cơ sở</label>
+      <input id="tenCoSo" placeholder="Ví dụ: Khách sạn ABC" />
+    </div>
+    <div>
+      <label>Ảnh đại diện</label>
+      <input id="image" type="file" accept="image/*" />
+    </div>
+  </div>
+
+  <div class="row-1">
+    <div>
+      <label>Mô tả</label>
+      <textarea id="moTa" rows="3" placeholder="Mô tả ngắn..." ></textarea>
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <label>Số nhà</label>
+      <input id="soNha" />
+    </div>
+    <div>
+      <label>Phường</label>
+      <input id="phuong" />
+    </div>
+  </div>
+  <div class="row">
+    <div>
+      <label>Quận/Huyện</label>
+      <input id="quan" />
+    </div>
+    <div>
+      <label>Thành phố</label>
+      <input id="thanhPho" />
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <label>Vĩ độ (lat - ViDo)</label>
+      <input id="viDo" placeholder="Ví dụ: 21.028511" />
+    </div>
+    <div>
+      <label>Kinh độ (lon - KinhDo)</label>
+      <input id="kinhDo" placeholder="Ví dụ: 105.804817" />
+    </div>
+  </div>
+
+  <div class="row-1">
+    <div>
+      <label>Tìm nhanh địa chỉ</label>
+      <div class="row">
+        <input id="searchBox" placeholder="Nhập địa chỉ, ví dụ: 1 Đại Cồ Việt, Hai Bà Trưng, Hà Nội" />
+        <button id="btnSearch" type="button">Tìm</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="map"></div>
+
+  <div class="actions">
+    <button id="btnSubmit">Tạo cơ sở</button>
+    <div class="muted">Click lên bản đồ để chọn vị trí. Kéo marker để tinh chỉnh. Hệ thống sẽ tự reverse geocode điền địa chỉ.</div>
+  </div>
+
+  <div id="msg"></div>
+
+  <script>
+    const API_BASE = window.location.origin; // Trang này chạy cùng host với API
+    const msg = document.getElementById('msg');
+
+    function showInfo(text) { msg.innerHTML = `<div class="info">${text}</div>`; }
+    function showError(text) { msg.innerHTML = `<div class="error">${text}</div>`; }
+
+    const viDoInput = document.getElementById('viDo');
+    const kinhDoInput = document.getElementById('kinhDo');
+    const soNhaInput = document.getElementById('soNha');
+    const phuongInput = document.getElementById('phuong');
+    const quanInput = document.getElementById('quan');
+    const thanhPhoInput = document.getElementById('thanhPho');
+
+    const DEFAULT_LAT = 21.028511; // Hà Nội
+    const DEFAULT_LON = 105.804817;
+
+    const map = L.map('map').setView([DEFAULT_LAT, DEFAULT_LON], 12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+
+    let marker = null;
+    function setMarker(lat, lon) {
+      if (!marker) {
+        marker = L.marker([lat, lon], { draggable: true }).addTo(map);
+        marker.on('dragend', () => {
+          const p = marker.getLatLng();
+          viDoInput.value = p.lat.toFixed(6);
+          kinhDoInput.value = p.lng.toFixed(6);
+          reverseGeocode(p.lat, p.lng);
+        });
+      } else {
+        marker.setLatLng([lat, lon]);
+      }
+      viDoInput.value = (+lat).toFixed(6);
+      kinhDoInput.value = (+lon).toFixed(6);
+    }
+
+    map.on('click', e => {
+      const { lat, lng } = e.latlng;
+      setMarker(lat, lng);
+      reverseGeocode(lat, lng);
+    });
+
+    async function reverseGeocode(lat, lon) {
+      try {
+        const url = `https://nominatim.openstreetmap.org/reverse?format=json&countrycodes=vn&lat=${lat}&lon=${lon}`;
+        const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+        const data = await res.json();
+        const a = data?.address || {};
+        soNhaInput.value = a.house_number || soNhaInput.value || '';
+        phuongInput.value = a.quarter || a.suburb || a.city_district || phuongInput.value || '';
+        quanInput.value = a.city_district || a.district || quanInput.value || '';
+        thanhPhoInput.value = a.city || a.province || a.state || thanhPhoInput.value || '';
+      } catch {}
+    }
+
+    async function geocode(address) {
+      const url = `https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=vn&q=${encodeURIComponent(address)}`;
+      const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+      const data = await res.json();
+      return data?.[0];
+    }
+
+    document.getElementById('btnSearch').addEventListener('click', async () => {
+      const q = document.getElementById('searchBox').value.trim();
+      if (!q) return;
+      const r = await geocode(q);
+      if (!r) { showError('Không tìm thấy địa chỉ'); return; }
+      const lat = parseFloat(r.lat), lon = parseFloat(r.lon);
+      map.setView([lat, lon], 16);
+      setMarker(lat, lon);
+      reverseGeocode(lat, lon);
+    });
+
+    document.getElementById('btnSubmit').addEventListener('click', async () => {
+      const tenCoSo = document.getElementById('tenCoSo').value.trim();
+      const moTa = document.getElementById('moTa').value.trim();
+      const file = document.getElementById('image').files[0];
+      const token = document.getElementById('token').value.trim();
+
+      if (!tenCoSo) { showError('Vui lòng nhập tên cơ sở'); return; }
+      if (!thanhPhoInput.value.trim()) { showError('Vui lòng nhập/điền Thành phố'); return; }
+
+      const fd = new FormData();
+      fd.append('tenCoSo', tenCoSo);
+      if (moTa) fd.append('moTa', moTa);
+      if (soNhaInput.value) fd.append('soNha', soNhaInput.value);
+      if (phuongInput.value) fd.append('phuong', phuongInput.value);
+      if (quanInput.value) fd.append('quan', quanInput.value);
+      fd.append('thanhPho', thanhPhoInput.value);
+      if (viDoInput.value) fd.append('viDo', viDoInput.value);
+      if (kinhDoInput.value) fd.append('kinhDo', kinhDoInput.value);
+      if (file) fd.append('file', file);
+
+      showInfo('Đang gửi...');
+      try {
+        const res = await fetch(`${API_BASE}/api/cosoluutru`, {
+          method: 'POST',
+          headers: token ? { 'Authorization': `Bearer ${token}` } : undefined,
+          body: fd
+        });
+        const json = await res.json();
+        if (!res.ok || !json?.success) {
+          throw new Error(json?.message || 'Tạo thất bại');
+        }
+        showInfo('Tạo thành công! ID: ' + (json?.data?.Id || json?.data?.id));
+      } catch (e) {
+        showError('Lỗi: ' + (e?.message || e));
+      }
+    });
+  </script>
+</body>
+</html>
