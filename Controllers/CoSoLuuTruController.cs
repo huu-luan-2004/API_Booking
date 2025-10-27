@@ -436,8 +436,19 @@ public class CoSoLuuTruController : ControllerBase
             phuong = form["phuong"].FirstOrDefault();
             quan = form["quan"].FirstOrDefault();
             thanhPho = form["thanhPho"].FirstOrDefault();
-            if (double.TryParse(form["kinhDo"].FirstOrDefault(), out var _kinhDo)) kinhDo = _kinhDo;
-            if (double.TryParse(form["viDo"].FirstOrDefault(), out var _viDo)) viDo = _viDo;
+            // Parse toạ độ với hỗ trợ dấu phẩy/dấu chấm và alias lat/lng
+            static bool TryParseInvariant(string? raw, out double value)
+            {
+                value = 0;
+                if (string.IsNullOrWhiteSpace(raw)) return false;
+                raw = raw.Trim().Replace(',', '.');
+                return double.TryParse(raw, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out value);
+            }
+
+            var kdRaw = form["kinhDo"].FirstOrDefault() ?? form["lon"].FirstOrDefault() ?? form["lng"].FirstOrDefault();
+            var vdRaw = form["viDo"].FirstOrDefault() ?? form["lat"].FirstOrDefault();
+            if (TryParseInvariant(kdRaw, out var kdVal)) kinhDo = kdVal;
+            if (TryParseInvariant(vdRaw, out var vdVal)) viDo = vdVal;
 
             var file = form.Files["file"] ?? form.Files["image"] ?? form.Files.FirstOrDefault();
             if (file != null && file.Length > 0)
@@ -503,17 +514,21 @@ public class CoSoLuuTruController : ControllerBase
                                  || !string.IsNullOrWhiteSpace(thanhPho)
                                  || kinhDo.HasValue || viDo.HasValue;
 
-        // Chuyển sang schema mới: chiTiet/pho/phuong/nuoc
+        // Chuyển sang schema mới: chiTiet/pho/phuong/nuoc (tận dụng cùng form đã đọc ở trên)
         string? u_chiTiet = null, u_pho = null, u_phuong = null, u_nuoc = null;
         if (Request.HasFormContentType)
         {
-            // Đọc từ form lần nữa (để tương thích cũ)
-            var form = await Request.ReadFormAsync();
-            u_chiTiet = form["chiTiet"].FirstOrDefault() ?? form["soNha"].FirstOrDefault();
-            var _ignoredUThon = form["thon"].FirstOrDefault();
-            u_pho = form["pho"].FirstOrDefault() ?? form["road"].FirstOrDefault(); // chỉ đường phố
-            u_phuong = form["phuong"].FirstOrDefault();
-            u_nuoc = form["nuoc"].FirstOrDefault() ?? form["country"].FirstOrDefault();
+            // Đọc từ form đã có (không đọc lại) để tương thích cũ
+            // Lưu ý: biến 'form' có scope bên trong khối if ở trên; để tái sử dụng, ta đọc lại an toàn nếu cần
+            var currentForm = HttpContext.Request.HasFormContentType ? await Request.ReadFormAsync() : null;
+            if (currentForm != null)
+            {
+                u_chiTiet = currentForm["chiTiet"].FirstOrDefault() ?? currentForm["soNha"].FirstOrDefault();
+                var _ignoredUThon = currentForm["thon"].FirstOrDefault();
+                u_pho = currentForm["pho"].FirstOrDefault() ?? currentForm["road"].FirstOrDefault(); // chỉ đường phố
+                u_phuong = currentForm["phuong"].FirstOrDefault();
+                u_nuoc = currentForm["nuoc"].FirstOrDefault() ?? currentForm["country"].FirstOrDefault();
+            }
         }
 
         if (hasAddressPayload)

@@ -52,16 +52,29 @@ public class RoomsController : ControllerBase
                 }
                 var imagePath = TryGet<string>(r, "Anh");
                 var imageUrl = !string.IsNullOrEmpty(imagePath) ? $"{Request.Scheme}://{Request.Host}{imagePath}" : null;
+                // Build diaChi object from joined fields (from CoSoLuuTru -> DiaChiChiTiet)
+                var diaChi = new {
+                    Id = TryGet<int?>(r, "IdDiaChi"),
+                    ChiTiet = TryGet<string>(r, "ChiTiet"),
+                    Pho = TryGet<string>(r, "Pho"),
+                    Phuong = TryGet<string>(r, "Phuong"),
+                    Nuoc = TryGet<string>(r, "Nuoc"),
+                    KinhDo = (object?)TryGet<decimal?>(r, "KinhDo") ?? TryGet<double?>(r, "KinhDo"),
+                    ViDo = (object?)TryGet<decimal?>(r, "ViDo") ?? TryGet<double?>(r, "ViDo")
+                };
                 
                 projected.Add(new {
-                    Id = id,
+                    id = id, // alias để FE không nhầm với id cơ sở
                     TenPhong = TryGet<string>(r,"TenPhong"),
                     MoTa = TryGet<string>(r,"MoTa"),
                     SoNguoiToiDa = TryGet<int?>(r,"SoNguoiToiDa"),
                     IdCoSoLuuTru = TryGet<int?>(r,"IdCoSoLuuTru"),
+                    accommodationId = TryGet<int?>(r,"IdCoSoLuuTru"), // alias cho FE
+                    coSoId = TryGet<int?>(r,"IdCoSoLuuTru"), // alias tiếng Việt
                     IdLoaiPhong = TryGet<int?>(r,"IdLoaiPhong"),
                     Anh = imagePath, // Image file path
                     ImageUrl = imageUrl, // Full image URL
+                    diaChi = diaChi,
                     NgayApDungGia = TryGet<DateTime?>(r, "NgayApDungGia"),
                     Gia = coKM ? giaKM : giaGoc,
                     GiaGoc = giaGoc,
@@ -93,6 +106,32 @@ public class RoomsController : ControllerBase
             var baseUrl = $"{Request.Scheme}://{Request.Host}";
             roomData["ImageUrl"] = $"{baseUrl}{imagePath}";
         }
+        // Add helpful aliases for FE routing
+        try
+        {
+            if (!roomData.ContainsKey("id") && roomData.TryGetValue("Id", out var rid)) roomData["id"] = rid;
+            if (roomData.TryGetValue("IdCoSoLuuTru", out var cid))
+            {
+                roomData["accommodationId"] = cid;
+                roomData["coSoId"] = cid;
+            }
+        }
+        catch { }
+        // Embed address fields as diaChi (joined from CoSoLuuTru -> DiaChiChiTiet)
+        try
+        {
+            var diaChi = new {
+                Id = TryGet<int?>(room, "IdDiaChi"),
+                ChiTiet = TryGet<string>(room, "ChiTiet"),
+                Pho = TryGet<string>(room, "Pho"),
+                Phuong = TryGet<string>(room, "Phuong"),
+                Nuoc = TryGet<string>(room, "Nuoc"),
+                KinhDo = (object?)TryGet<decimal?>(room, "KinhDo") ?? TryGet<double?>(room, "KinhDo"),
+                ViDo = (object?)TryGet<decimal?>(room, "ViDo") ?? TryGet<double?>(room, "ViDo")
+            };
+            roomData["diaChi"] = diaChi;
+        }
+        catch { }
         
         return Ok(new { success=true, data = roomData });
     }

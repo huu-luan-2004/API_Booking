@@ -5,8 +5,12 @@
       "PackagePath": "staticwebassets\\create-accommodation-map.html"
     },
     {
-      "Id": "E:\\Do_an_chuyen_nganh\\API\\hotel-booking-api-dotnet\\wwwroot\\uploads\\accommodations\\accommodation_3_20251026_051404.jpg",
-      "PackagePath": "staticwebassets\\uploads\\accommodations\\accommodation_3_20251026_051404.jpg"
+      "Id": "E:\\Do_an_chuyen_nganh\\API\\hotel-booking-api-dotnet\\wwwroot\\uploads\\accommodations\\accommodation_1_20251026_220404.jpg",
+      "PackagePath": "staticwebassets\\uploads\\accommodations\\accommodation_1_20251026_220404.jpg"
+    },
+    {
+      "Id": "E:\\Do_an_chuyen_nganh\\API\\hotel-booking-api-dotnet\\wwwroot\\uploads\\accommodations\\accommodation_3_20251026_220422.jpg",
+      "PackagePath": "staticwebassets\\uploads\\accommodations\\accommodation_3_20251026_220422.jpg"
     },
     {
       "Id": "E:\\Do_an_chuyen_nganh\\API\\hotel-booking-api-dotnet\\wwwroot\\uploads\\accommodations\\accommodation_4_20251026_051352.jpg",
@@ -27,6 +31,10 @@
     {
       "Id": "E:\\Do_an_chuyen_nganh\\API\\hotel-booking-api-dotnet\\wwwroot\\uploads\\rooms\\room_20251026_053343_91580e2b1e054005ba3315530fdfe46d.jpg",
       "PackagePath": "staticwebassets\\uploads\\rooms\\room_20251026_053343_91580e2b1e054005ba3315530fdfe46d.jpg"
+    },
+    {
+      "Id": "E:\\Do_an_chuyen_nganh\\API\\hotel-booking-api-dotnet\\wwwroot\\uploads\\rooms\\room_25_20251026_055622.jpg",
+      "PackagePath": "staticwebassets\\uploads\\rooms\\room_25_20251026_055622.jpg"
     },
     {
       "Id": "E:\\Do_an_chuyen_nganh\\API\\hotel-booking-api-dotnet\\wwwroot\\uploads\\rooms\\room_26_20251026_052106.jpg",
