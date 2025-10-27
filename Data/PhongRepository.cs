@@ -15,10 +15,15 @@ public class PhongRepository
         var kw = (q ?? string.Empty).Trim();
         var where = string.IsNullOrEmpty(kw) ? string.Empty : " WHERE p.TenPhong LIKE @kw ";
         var sql = $@"
-            SELECT p.Id, p.TenPhong, p.MoTa, p.SoNguoiToiDa, p.IdCoSoLuuTru, p.IdLoaiPhong,
+            SELECT 
+                p.Id, p.TenPhong, p.MoTa, p.SoNguoiToiDa, p.IdCoSoLuuTru, p.IdLoaiPhong,
                 p.Anh,
-                gp.GiaPhong AS Gia, gp.NgayApDung AS NgayApDungGia
+                gp.GiaPhong AS Gia, gp.NgayApDung AS NgayApDungGia,
+                d.Id AS IdDiaChi,
+                d.ChiTiet, d.Pho, d.Phuong, d.Nuoc, d.KinhDo, d.ViDo
             FROM Phong p
+            LEFT JOIN CoSoLuuTru c ON c.Id = p.IdCoSoLuuTru
+            LEFT JOIN DiaChiChiTiet d ON d.Id = c.IdDiaChi
             OUTER APPLY (
                 SELECT TOP 1 g.GiaPhong, g.NgayApDung
                 FROM GiaPhong g
@@ -38,8 +43,12 @@ public class PhongRepository
             SELECT TOP 1 
                 p.Id, p.TenPhong, p.MoTa, p.SoNguoiToiDa, p.IdCoSoLuuTru, p.IdLoaiPhong,
                 p.Anh,
-                gp.GiaPhong AS Gia, gp.NgayApDung AS NgayApDungGia
+                gp.GiaPhong AS Gia, gp.NgayApDung AS NgayApDungGia,
+                d.Id AS IdDiaChi,
+                d.ChiTiet, d.Pho, d.Phuong, d.Nuoc, d.KinhDo, d.ViDo
             FROM Phong p
+            LEFT JOIN CoSoLuuTru c ON c.Id = p.IdCoSoLuuTru
+            LEFT JOIN DiaChiChiTiet d ON d.Id = c.IdDiaChi
             OUTER APPLY (
                 SELECT TOP 1 g.GiaPhong, g.NgayApDung
                 FROM GiaPhong g
@@ -98,7 +107,15 @@ public class PhongRepository
             // Support both 'gia' and 'giaPhong' keys
             decimal? giaInsert = null;
             try { if (body?.gia != null) giaInsert = (decimal)body.gia; } catch { }
-            try { if (giaInsert == null && body?.giaPhong != null) giaInsert = (decimal)body.giaPhong; } catch { }
+            try 
+            { 
+                if (giaInsert == null)
+                {
+                    var gpObj = (object?)body?.giaPhong;
+                    if (gpObj != null) giaInsert = Convert.ToDecimal(gpObj);
+                }
+            } 
+            catch { }
             if (giaInsert.HasValue)
             {
                 var gia = giaInsert.Value;
@@ -110,7 +127,7 @@ public class PhongRepository
             // ignore if GiaPhong table not exists
         }
 
-        return await GetByIdAsync(id);
+    return await GetByIdAsync(id) ?? new { Id = id };
     }
 
     public async Task<dynamic> UpdateAsync(int id, dynamic body)
@@ -160,7 +177,7 @@ public class PhongRepository
             await db.ExecuteAsync(sql, p);
         }
 
-        return await GetByIdAsync(id);
+    return await GetByIdAsync(id) ?? new { Id = id };
     }
 
     public async Task UpdateImageAsync(int id, string imagePath)

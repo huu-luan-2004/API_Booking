@@ -31,6 +31,126 @@ public class PaymentsController : ControllerBase
         public string? noiDung { get; set; }
     }
 
+    // DTO đơn giản chỉ cần idDatPhong
+    public class InitByBookingRequest { public int idDatPhong { get; set; } }
+
+    // Helper: tạo giao dịch và build URL VNPay (tái sử dụng logic từ Init)
+    private async Task<object> CreatePaymentAndUrlAsync(int idDatPhong, decimal amount, string loaiGiaoDich, bool isDeposit)
+    {
+        if (amount <= 0) throw new ArgumentException("Số tiền phải > 0", nameof(amount));
+
+        // Làm tròn về đơn vị đồng cho nhất quán với VNPAY (nhân 100 phía sau)
+        amount = Math.Round(amount, 0, MidpointRounding.AwayFromZero);
+
+        // Sinh mã
+        var maGiaoDich = $"PAY_{DateTime.UtcNow:yyyyMMddHHmmss}_{Guid.NewGuid().ToString("N")[..6]}";
+        var maDonHang = $"ORD_{DateTime.UtcNow:yyyyMMddHHmmss}_{idDatPhong}";
+
+        // Hủy giao dịch chờ cũ và tạo giao dịch mới ở trạng thái chờ thanh toán
+        await _payRepo.CancelAllPendingForBookingAsync(idDatPhong);
+        var noiDung = loaiGiaoDich;
+        await _payRepo.CreateAsync(idDatPhong, maGiaoDich, amount, "VNPAY", "Chờ thanh toán", noiDung, maDonHang, loaiGiaoDich);
+
+        // Build ReturnUrl theo host hiện tại hoặc config
+        var requestHost = Request.Host.ToString();
+        var scheme = Request.Scheme;
+        var baseUrl = $"{scheme}://{requestHost}";
+        var configuredReturn = _config["VNPAY_RETURN_URL"];
+        string returnUrl;
+        if (!string.IsNullOrWhiteSpace(configuredReturn))
+        {
+            returnUrl = configuredReturn.Contains("{host}", StringComparison.OrdinalIgnoreCase)
+                ? configuredReturn.Replace("{host}", requestHost)
+                : (Uri.IsWellFormedUriString(configuredReturn, UriKind.Absolute) ? configuredReturn : $"{baseUrl}/api/payments/vnpay-return");
+        }
+        else
+        {
+            returnUrl = $"{baseUrl}/api/payments/vnpay-return";
+        }
+
+        var tmnCode = _config["VNPAY_TMN_CODE"] ?? string.Empty;
+        var ipAddr = VnPayService.GetClientIp(HttpContext);
+        var amount100 = (long)(amount * 100);
+        var createDate = DateTime.Now.ToString("yyyyMMddHHmmss");
+        var expireDate = DateTime.Now.AddMinutes(15).ToString("yyyyMMddHHmmss");
+
+        var dict = new Dictionary<string, string>
+        {
+            ["vnp_Version"] = "2.1.0",
+            ["vnp_Command"] = "pay",
+            ["vnp_TmnCode"] = tmnCode,
+            ["vnp_Amount"] = amount100.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["vnp_CreateDate"] = createDate,
+            ["vnp_ExpireDate"] = expireDate,
+            ["vnp_CurrCode"] = "VND",
+            ["vnp_IpAddr"] = ipAddr,
+            ["vnp_Locale"] = "vn",
+            ["vnp_OrderInfo"] = isDeposit ? $"Thanh toan coc don {maDonHang}" : $"Thanh toan don {maDonHang}",
+            ["vnp_OrderType"] = "other",
+            ["vnp_ReturnUrl"] = returnUrl!,
+            ["vnp_TxnRef"] = maGiaoDich
+        };
+
+        var redirectUrl = _vnPay.BuildPaymentUrl(dict);
+        return new { maGiaoDich, maDonHang, redirectUrl, amount, loaiGiaoDich };
+    }
+
+    // 1) Thanh toán FULL 100%: tính số tiền còn lại để đủ 100%
+    [Authorize]
+    [HttpPost("init-full")]
+    public async Task<IActionResult> InitFull([FromBody] InitByBookingRequest body)
+    {
+        if (body == null || body.idDatPhong <= 0) return BadRequest(new { success=false, message="Thiếu idDatPhong" });
+        var booking = await _bookingRepo.GetByIdAsync(body.idDatPhong);
+        if (booking == null) return NotFound(new { success=false, message="Không tìm thấy đơn đặt phòng" });
+        decimal tong = 0m; try { tong = (decimal)(booking?.TongTienTamTinh ?? 0m); } catch { }
+        var paid = await _payRepo.GetTongDaThanhToanAsync(body.idDatPhong);
+        var amount = Math.Max(0, tong - paid);
+        if (amount <= 0) return BadRequest(new { success=false, message="Không còn số tiền cần thanh toán (đã đủ 100%)" });
+        var result = await CreatePaymentAndUrlAsync(body.idDatPhong, amount, "Thanh toán", isDeposit:false);
+        return Ok(new { success=true, data = result });
+    }
+
+    // 2) Thanh toán CỌC 30%: tính số tiền để đạt mức 30% tổng (mặc định cấu hình 0.3 nếu khác vẫn lấy 0.3)
+    [Authorize]
+    [HttpPost("init-deposit-30")]
+    public async Task<IActionResult> InitDeposit30([FromBody] InitByBookingRequest body)
+    {
+        if (body == null || body.idDatPhong <= 0) return BadRequest(new { success=false, message="Thiếu idDatPhong" });
+        var booking = await _bookingRepo.GetByIdAsync(body.idDatPhong);
+        if (booking == null) return NotFound(new { success=false, message="Không tìm thấy đơn đặt phòng" });
+        decimal tong = 0m; try { tong = (decimal)(booking?.TongTienTamTinh ?? 0m); } catch { }
+        var paid = await _payRepo.GetTongDaThanhToanAsync(body.idDatPhong);
+        var depositRate = _config.GetValue<decimal>("PAYMENT:DepositRate", 0.3m);
+        var desired = Math.Round(tong * depositRate, 0, MidpointRounding.AwayFromZero);
+        var amount = Math.Max(0, desired - paid);
+        if (amount <= 0) return BadRequest(new { success=false, message="Đã đạt/vượt mức cọc 30%, không cần thanh toán thêm" });
+        var result = await CreatePaymentAndUrlAsync(body.idDatPhong, amount, "Thanh toán cọc", isDeposit:true);
+        return Ok(new { success=true, data = result });
+    }
+
+    // 3) Thanh toán BỔ SUNG 70%: tính số tiền để đạt mức 70% tổng
+    [Authorize]
+    [HttpPost("init-supplement-70")]
+    public async Task<IActionResult> InitSupplement70([FromBody] InitByBookingRequest body)
+    {
+        if (body == null || body.idDatPhong <= 0) return BadRequest(new { success=false, message="Thiếu idDatPhong" });
+        var booking = await _bookingRepo.GetByIdAsync(body.idDatPhong);
+        if (booking == null) return NotFound(new { success=false, message="Không tìm thấy đơn đặt phòng" });
+        decimal tong = 0m; try { tong = (decimal)(booking?.TongTienTamTinh ?? 0m); } catch { }
+        var paid = await _payRepo.GetTongDaThanhToanAsync(body.idDatPhong);
+        // Supplement 70% = thanh toán phần còn lại để đạt 100%, nhưng yêu cầu đã cọc tối thiểu 30% trước
+        var depositRate = _config.GetValue<decimal>("PAYMENT:DepositRate", 0.3m);
+        var requiredDeposit = Math.Round(tong * depositRate, 0, MidpointRounding.AwayFromZero);
+        if (paid < requiredDeposit)
+            return BadRequest(new { success=false, message=$"Vui lòng thanh toán cọc {depositRate:P0} trước khi thanh toán phần còn lại" });
+
+        var amount = Math.Max(0, tong - paid);
+        if (amount <= 0) return BadRequest(new { success=false, message="Đơn đã được thanh toán đủ 100%" });
+        var result = await CreatePaymentAndUrlAsync(body.idDatPhong, amount, "Thanh toán bổ sung", isDeposit:false);
+        return Ok(new { success=true, data = result });
+    }
+
     // Khởi tạo giao dịch thanh toán cho 1 đơn đặt phòng
     [Authorize]
     [HttpPost("init")]

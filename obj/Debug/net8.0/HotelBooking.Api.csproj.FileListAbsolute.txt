@@ -80,3 +80,4 @@ E:\Do_an_chuyen_nganh\API\hotel-booking-api-dotnet\obj\Debug\net8.0\refint\Hotel
 E:\Do_an_chuyen_nganh\API\hotel-booking-api-dotnet\obj\Debug\net8.0\HotelBooking.Api.pdb
 E:\Do_an_chuyen_nganh\API\hotel-booking-api-dotnet\obj\Debug\net8.0\HotelBooking.Api.genruntimeconfig.cache
 E:\Do_an_chuyen_nganh\API\hotel-booking-api-dotnet\obj\Debug\net8.0\ref\HotelBooking.Api.dll
+E:\Do_an_chuyen_nganh\API\hotel-booking-api-dotnet\obj\Debug\net8.0\HotelBooking.Api.sourcelink.json
