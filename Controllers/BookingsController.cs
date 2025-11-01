@@ -74,11 +74,48 @@ public class BookingsController : ControllerBase
 
         if (tong <= 0) tong = 3000000m; // fallback cuối cùng để không chặn luồng
 
-        var id = await _repo.CreateAsync(idNguoiDung, idPhong, ngayNhan, ngayTra, tong);
-        var dp = await _repo.GetByIdAsync(id);
-        if (dp == null)
-            return StatusCode(500, new { success=false, message="Có lỗi xảy ra khi tạo đặt phòng" });
+        int id;
+        try
+        {
+            id = await _repo.CreateAsync(idNguoiDung, idPhong, ngayNhan, ngayTra, tong);
+        }
+        catch (Exception ex)
+        {
+            var msg = ex.Message ?? string.Empty;
+            var detail = (ex.InnerException?.Message ?? string.Empty);
+            var all = string.Join(" | ", new[]{ msg, detail }).ToLowerInvariant();
+            // Nếu phòng vừa bị giữ/đặt trong khoảng thời gian này
+            if (msg.Contains("giữ/đặt", StringComparison.OrdinalIgnoreCase) || msg.Contains("trùng", StringComparison.OrdinalIgnoreCase))
+                return Conflict(new { success=false, errorCode = "BOOKING_CONFLICT", message = msg });
 
+            // Nếu không thể khóa tài nguyên (hết timeout)
+            if (all.Contains("khoá tài nguyên") || all.Contains("khóa tài nguyên") || all.Contains("timeout") || all.Contains("deadlock") || all.Contains("sp_getapplock"))
+                return StatusCode(503, new { success=false, errorCode = "BOOKING_LOCK_TIMEOUT", message = "Hệ thống đang bận xử lý đặt phòng khác cho phòng này, vui lòng thử lại sau." });
+
+            return StatusCode(500, new { success=false, errorCode = "BOOKING_CREATE_ERROR", message = "Có lỗi xảy ra khi tạo đặt phòng", detail = msg });
+        }
+        var dp = await _repo.GetByIdAsync(id);
+        // Nếu không lấy được đầy đủ join dữ liệu, vẫn trả về dữ liệu tối thiểu để FE tiếp tục luồng
+        if (dp == null)
+        {
+            var createdAtFallback = DateTime.Now;
+            var responseLite = new {
+                Id = id,
+                IdNguoiDung = idNguoiDung,
+                IdPhong = idPhong,
+                NgayNhanPhong = ngayNhan,
+                NgayTraPhong = ngayTra,
+                TongTienTamTinh = tong,
+                createdAt = createdAtFallback,
+                holdExpiresAt = createdAtFallback.AddMinutes(15),
+                trangThai = new { ma = "ChoThanhToanCoc", ten = "Chờ thanh toán cọc" }
+            };
+            return StatusCode(201, new { success=true, message="Đặt phòng thành công", data = responseLite });
+        }
+
+        DateTime? createdAt = null;
+        try { createdAt = (DateTime?)dp.CreatedAt; } catch { }
+        var holdExpiresAt = createdAt?.AddMinutes(15);
         var response = new {
             dp.Id,
             dp.IdNguoiDung,
@@ -86,6 +123,8 @@ public class BookingsController : ControllerBase
             dp.NgayNhanPhong,
             dp.NgayTraPhong,
             dp.TongTienTamTinh,
+            createdAt,
+            holdExpiresAt,
             nguoiDung = new { id = dp.IdNguoiDung, hoTen = dp.ND_HoTen, email = dp.ND_Email, soDienThoai = dp.ND_SoDienThoai },
             phong = new { id = dp.IdPhong, tenPhong = dp.P_TenPhong },
             coSo = new { tenCoSo = dp.CS_TenCoSo },

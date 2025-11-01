@@ -7,13 +7,47 @@ public class NguoiDungRepository
     private readonly SqlConnectionFactory _factory;
     public NguoiDungRepository(SqlConnectionFactory factory) => _factory = factory;
 
+    // Cache tên cột Firebase UID để tránh truy vấn INFORMATION_SCHEMA mỗi lần
+    private static string? _firebaseUidColumn;
+    private static readonly object _colLock = new();
+
+    private static async Task<string> ResolveFirebaseUidColumnAsync(System.Data.IDbConnection db)
+    {
+        if (!string.IsNullOrEmpty(_firebaseUidColumn)) return _firebaseUidColumn!;
+        // Thử lấy từ sys.columns cho nhanh
+        try
+        {
+            var name = await db.ExecuteScalarAsync<string>(
+                "SELECT TOP 1 name FROM sys.columns WHERE object_id=OBJECT_ID('dbo.NguoiDung') AND name IN ('FirebaseUID','FirebaseUid') ORDER BY CASE name WHEN 'FirebaseUID' THEN 0 ELSE 1 END");
+            if (!string.IsNullOrWhiteSpace(name))
+            {
+                lock (_colLock) { _firebaseUidColumn ??= name; }
+                return name;
+            }
+        }
+        catch { }
+        // Fallback qua INFORMATION_SCHEMA
+        try
+        {
+            var existsUpper = await db.ExecuteScalarAsync<int>("SELECT CASE WHEN EXISTS(SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='NguoiDung' AND COLUMN_NAME='FirebaseUID') THEN 1 ELSE 0 END");
+            var col = existsUpper == 1 ? "FirebaseUID" : "FirebaseUid";
+            lock (_colLock) { _firebaseUidColumn ??= col; }
+            return col;
+        }
+        catch
+        {
+            // Chấp nhận mặc định
+            return _firebaseUidColumn ??= "FirebaseUID";
+        }
+    }
+
     public async Task<dynamic?> FindByFirebaseUidAsync(string firebaseUid)
     {
         using var db = _factory.Create();
-        var col = await db.ExecuteScalarAsync<int>("SELECT CASE WHEN EXISTS(SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='NguoiDung' AND COLUMN_NAME='FirebaseUID') THEN 1 ELSE 0 END");
-        var column = col == 1 ? "FirebaseUID" : "FirebaseUid";
+        var column = await ResolveFirebaseUidColumnAsync(db);
         var sql = $"SELECT TOP 1 * FROM NguoiDung WHERE {column}=@uid";
-        var rows = await db.QueryAsync(sql, new { uid = firebaseUid });
+        // Tăng timeout phòng trường hợp DB chậm/đang lock và tránh 500 ngay lập tức
+        var rows = await db.QueryAsync(new CommandDefinition(sql, new { uid = firebaseUid }, commandTimeout: 60));
         return rows.FirstOrDefault();
     }
 
@@ -79,7 +113,7 @@ public class NguoiDungRepository
     public async Task<dynamic?> FindByEmailAsync(string email)
     {
         using var db = _factory.Create();
-        var rows = await db.QueryAsync("SELECT TOP 1 * FROM NguoiDung WHERE Email=@email", new { email });
+        var rows = await db.QueryAsync(new CommandDefinition("SELECT TOP 1 * FROM NguoiDung WHERE Email=@email", new { email }, commandTimeout: 60));
         return rows.FirstOrDefault();
     }
 
@@ -89,34 +123,38 @@ public class NguoiDungRepository
         // Only update when Email column exists
         var hasEmail = await HasColumn(db, "Email");
         if (!hasEmail) return;
-        await db.ExecuteAsync("UPDATE NguoiDung SET Email=@email WHERE Id=@id", new { id, email });
+        await db.ExecuteAsync(new CommandDefinition("UPDATE NguoiDung SET Email=@email WHERE Id=@id", new { id, email }, commandTimeout: 60));
     }
 
     public async Task<int> CreateUserAsync(string? email, string? hoTen, string? soDienThoai, string firebaseUid, string vaiTro)
     {
         using var db = _factory.Create();
         // Detect identity on Id
-        var isIdentity = await db.ExecuteScalarAsync<int>("SELECT COLUMNPROPERTY(OBJECT_ID('dbo.NguoiDung'),'Id','IsIdentity')");
+        var isIdentity = await db.ExecuteScalarAsync<int>(new CommandDefinition("SELECT COLUMNPROPERTY(OBJECT_ID('dbo.NguoiDung'),'Id','IsIdentity')", commandTimeout: 60));
         int? newId = null;
         if (isIdentity != 1)
         {
-            newId = await db.ExecuteScalarAsync<int>("SELECT ISNULL(MAX(Id),0)+1 FROM NguoiDung");
+            newId = await db.ExecuteScalarAsync<int>(new CommandDefinition("SELECT ISNULL(MAX(Id),0)+1 FROM NguoiDung", commandTimeout: 60));
         }
 
         // Detect type of TrangThaiTaiKhoan
-        var type = await db.ExecuteScalarAsync<string>("SELECT DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='NguoiDung' AND COLUMN_NAME='TrangThaiTaiKhoan'");
+    var type = await db.ExecuteScalarAsync<string>(new CommandDefinition("SELECT DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='NguoiDung' AND COLUMN_NAME='TrangThaiTaiKhoan'", commandTimeout: 60));
         var useBit = string.Equals(type, "bit", StringComparison.OrdinalIgnoreCase);
         var useNumeric = new[] { "int", "bigint", "smallint", "tinyint", "decimal", "numeric", "float", "real" }.Contains((type ?? string.Empty).ToLower());
         var trangThai = useBit ? (object)true : useNumeric ? 1 : "Bình thường";
 
-        var columns = new List<string>();
+    var columns = new List<string>();
         var values = new List<string>();
         var param = new DynamicParameters();
 
+    // Fallbacks to satisfy NOT NULL columns without defaults
+    var safeHoTen = hoTen ?? (email?.Split('@').FirstOrDefault()) ?? "Khách";
+    var safeSoDienThoai = soDienThoai ?? string.Empty;
+
         if (newId.HasValue) { columns.Add("Id"); values.Add("@Id"); param.Add("Id", newId.Value); }
-        if (await HasColumn(db, "HoTen")) { columns.Add("HoTen"); values.Add("@HoTen"); param.Add("HoTen", hoTen); }
+        if (await HasColumn(db, "HoTen")) { columns.Add("HoTen"); values.Add("@HoTen"); param.Add("HoTen", safeHoTen); }
         if (await HasColumn(db, "Email")) { columns.Add("Email"); values.Add("@Email"); param.Add("Email", email); }
-        if (await HasColumn(db, "SoDienThoai")) { columns.Add("SoDienThoai"); values.Add("@SoDienThoai"); param.Add("SoDienThoai", soDienThoai); }
+        if (await HasColumn(db, "SoDienThoai")) { columns.Add("SoDienThoai"); values.Add("@SoDienThoai"); param.Add("SoDienThoai", safeSoDienThoai); }
         if (await HasColumn(db, "TrangThaiTaiKhoan")) { columns.Add("TrangThaiTaiKhoan"); values.Add("@TrangThai"); param.Add("TrangThai", trangThai); }
         if (await HasColumn(db, "CreatedAt")) { columns.Add("CreatedAt"); values.Add("@CreatedAt"); param.Add("CreatedAt", DateTime.UtcNow); }
         if (await HasColumn(db, "FirebaseUID")) { columns.Add("FirebaseUID"); values.Add("@Fuid"); param.Add("Fuid", firebaseUid); }
@@ -125,18 +163,21 @@ public class NguoiDungRepository
 
         if (!columns.Any()) throw new Exception("NguoiDung table has no expected columns");
         var sql = $"INSERT INTO NguoiDung ({string.Join(",", columns)}) VALUES ({string.Join(",", values)})";
-        await db.ExecuteAsync(sql, param);
+    await db.ExecuteAsync(new CommandDefinition(sql, param, commandTimeout: 60));
 
         // return new id if present otherwise fetch
         if (newId.HasValue) return newId.Value;
-        var id = await db.ExecuteScalarAsync<int>("SELECT TOP 1 Id FROM NguoiDung WHERE (Email=@Email OR @Email IS NULL) AND (@Fuid IS NULL OR FirebaseUID=@Fuid OR FirebaseUid=@Fuid) ORDER BY Id DESC", new { Email = email, Fuid = firebaseUid });
+        var fuidCol = await ResolveFirebaseUidColumnAsync(db);
+        var sqlGetId = $"SELECT TOP 1 Id FROM NguoiDung WHERE (Email=@Email OR @Email IS NULL) AND (@Fuid IS NULL OR {fuidCol}=@Fuid) ORDER BY Id DESC";
+        var id = await db.ExecuteScalarAsync<int>(new CommandDefinition(sqlGetId, new { Email = email, Fuid = firebaseUid }, commandTimeout: 60));
         return id;
     }
 
     public async Task<List<string>> GetRolesAsync(dynamic user)
     {
         using var db = _factory.Create();
-        var rows = await db.QueryAsync<string>("SELECT TOP 1 VaiTro FROM NguoiDung WHERE Id=@Id", new { Id = (int)user.Id });
+        var idVal = Convert.ToInt32(user.Id);
+        var rows = await db.QueryAsync<string>(new CommandDefinition("SELECT TOP 1 VaiTro FROM NguoiDung WHERE Id=@Id", new { Id = idVal }, commandTimeout: 60));
         var roleStr = rows.FirstOrDefault();
         if (string.IsNullOrWhiteSpace(roleStr)) return new List<string>();
         // Support single or comma-separated roles in DB (e.g., "Admin" or "Admin,ChuCoSo")
