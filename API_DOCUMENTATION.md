@@ -376,27 +376,62 @@ Authorization: Bearer <admin_token>
 
 ## 🔐 **10. XÁC THỰC** `/api/auth`
 
-### **Đăng nhập**
+Hệ thống sử dụng Firebase Authentication ở frontend (Email/Password hoặc Google) để lấy Firebase ID Token, sau đó gọi API backend để đổi sang JWT nội bộ. Các API sau nhận key `idToken` là Firebase ID Token.
+
+### Đăng nhập (bất kỳ provider)
 ```http
 POST /api/auth/login
 Content-Type: application/json
 
 {
-  "email": "string",
-  "password": "string"
+  "idToken": "<FIREBASE_ID_TOKEN>"
 }
 ```
 
-### **Đăng ký**
+### Đăng nhập Google (alias)
+```http
+POST /api/auth/google
+Content-Type: application/json
+
+{
+  "idToken": "<FIREBASE_ID_TOKEN_TU_GOOGLE>"
+}
+```
+
+### Làm mới JWT bằng Firebase ID Token mới
+```http
+POST /api/auth/refresh-token
+Content-Type: application/json
+
+{
+  "idToken": "<FIREBASE_ID_TOKEN>"
+}
+```
+
+### Đăng ký người dùng từ Firebase
 ```http
 POST /api/auth/register
 Content-Type: application/json
 
 {
-  "email": "string", 
-  "password": "string",
+  "idToken": "<FIREBASE_ID_TOKEN>",
   "hoTen": "string",
   "soDienThoai": "string"
+}
+```
+
+Tất cả các API trên sẽ trả về dạng:
+```json
+{
+  "success": true,
+  "message": "...",
+  "data": {
+    "user": { /* user từ bảng NguoiDung */ },
+    "roles": ["KhachHang"],
+    "permissions": ["ROOM_READ", "BOOKING_WRITE"],
+    "token": "<JWT>",
+    "accessToken": "<JWT>"
+  }
 }
 ```
 

@@ -1344,3 +1344,52 @@ describe('Authentication Flow', () => {
 ```
 
 **🔐 Firebase Authentication & Authorization implementation hoàn tất với đầy đủ tính năng bảo mật và phân quyền!**
+
+---
+
+## 🚀 Google Sign‑in nhanh
+
+Đã bật provider Google trong Firebase (ảnh minh hoạ ở yêu cầu). Ở FE chỉ cần popup Google rồi gửi Firebase ID Token về backend:
+
+```javascript
+import { getAuth, GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
+
+export async function loginWithGoogle() {
+  const auth = getAuth();
+  const provider = new GoogleAuthProvider();
+  const credential = await signInWithPopup(auth, provider);
+  const idToken = await credential.user.getIdToken();
+
+  const res = await fetch(`${process.env.REACT_APP_API_BASE_URL}/auth/google`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ idToken })
+  });
+  const json = await res.json();
+  if (!json.success) throw new Error(json.message || 'Google login failed');
+
+  // Lưu token/role như các bước ở Auth Service
+  localStorage.setItem('authToken', json.data.accessToken);
+  localStorage.setItem('userRole', json.data.roles?.[0] ?? 'KhachHang');
+  localStorage.setItem('userData', JSON.stringify(json.data.user));
+  return json.data;
+}
+```
+
+Làm mới JWT backend nếu cần:
+
+```javascript
+import { getAuth } from 'firebase/auth';
+
+export async function refreshBackendToken() {
+  const user = getAuth().currentUser;
+  if (!user) return null;
+  const idToken = await user.getIdToken(true);
+  const res = await fetch(`${process.env.REACT_APP_API_BASE_URL}/auth/refresh-token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ idToken })
+  });
+  return res.json();
+}
+```

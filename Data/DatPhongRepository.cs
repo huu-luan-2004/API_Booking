@@ -1,4 +1,6 @@
 using Dapper;
+using Microsoft.Data.SqlClient;
+using System.Data;
 
 namespace HotelBookingApi.Data;
 
@@ -9,23 +11,90 @@ public class DatPhongRepository
 
     public async Task<int> CreateAsync(int idNguoiDung, int idPhong, DateTime ngayNhanPhong, DateTime ngayTraPhong, decimal tongTien)
     {
-        using var db = _factory.Create();
-        // Xác định trạng thái khởi tạo: Chờ thanh toán cọc (theo bảng TrangThaiDatPhong)
+        using var conn = (SqlConnection)_factory.Create();
+        await conn.OpenAsync();
+    using var tx = conn.BeginTransaction(IsolationLevel.Serializable);
+
+        // 1) Khoá theo phòng
+        //    - Ưu tiên dùng sp_getapplock để có lock tên theo IdPhong.
+        //    - Nếu không khả dụng (thiếu quyền/timeout), fallback về khoá hàng trên bảng Phong (UPDLOCK, HOLDLOCK) theo Id phòng.
+        var resource = $"room-{idPhong}";
+        var lockSql = @"DECLARE @r INT; EXEC @r = sp_getapplock @Resource=@res, @LockMode='Exclusive', @LockOwner='Transaction', @Timeout=60000; SELECT @r";
+        int lockRes;
+        try
+        {
+            lockRes = await conn.ExecuteScalarAsync<int>(lockSql, new { res = resource }, tx);
+        }
+        catch
+        {
+            // Nếu không thể gọi sp_getapplock (không tồn tại/thiếu quyền), coi như thất bại để dùng fallback
+            lockRes = -999;
+        }
+        if (lockRes < 0)
+        {
+            // Fallback: khóa cục bộ trên bản ghi phòng để tuần tự hoá các giao dịch theo phòng
+            await conn.ExecuteAsync("SELECT 1 FROM Phong WITH (UPDLOCK, HOLDLOCK) WHERE Id=@id", new { id = idPhong }, tx);
+        }
+
+        // 2) Xác định trạng thái khởi tạo: ChoThanhToanCoc
         int statusId = 1; // fallback mặc định
         try
         {
-            var maybe = await db.ExecuteScalarAsync<int?>(
+            var maybe = await conn.ExecuteScalarAsync<int?>(
                 "SELECT TOP 1 Id FROM TrangThaiDatPhong WHERE MaTrangThai=@m OR TenTrangThai=@m",
-                new { m = "ChoThanhToanCoc" }
+                new { m = "ChoThanhToanCoc" }, tx
             );
             if (maybe.HasValue) statusId = maybe.Value;
         }
         catch { /* nếu bảng không tồn tại hoặc khác schema, giữ mặc định */ }
 
+        // 3) Kiểm tra trùng lịch NGAY TRONG TRANSACTION với quy tắc hold 15 phút
+                var conflictSql = @"
+                        SELECT COUNT(1)
+                        FROM DatPhong dp WITH (UPDLOCK, HOLDLOCK)
+            INNER JOIN TrangThaiDatPhong tt ON dp.IdTrangThai = tt.Id
+            WHERE dp.IdPhong = @idPhong
+              AND (
+                    tt.MaTrangThai IN (N'DaCoc', N'ChoCheckIn', N'DaThanhToanDayDu', N'DaNhanPhong')
+                    OR (tt.MaTrangThai = N'ChoThanhToanCoc' AND dp.CreatedAt >= DATEADD(MINUTE, -15, GETDATE()))
+                  )
+              AND NOT (
+                    @tra <= dp.NgayNhanPhong
+                    OR @nhan >= dp.NgayTraPhong
+                  )";
+
+        int conflicts;
+        try
+        {
+            conflicts = await conn.ExecuteScalarAsync<int>(conflictSql, new { idPhong, nhan = ngayNhanPhong, tra = ngayTraPhong }, tx);
+        }
+        catch
+        {
+            // Fallback nếu không có CreatedAt
+                        var conflictNoHold = @"
+                                SELECT COUNT(1)
+                                FROM DatPhong dp WITH (UPDLOCK, HOLDLOCK)
+                INNER JOIN TrangThaiDatPhong tt ON dp.IdTrangThai = tt.Id
+                WHERE dp.IdPhong = @idPhong
+                  AND tt.MaTrangThai IN (N'DaCoc', N'ChoCheckIn', N'DaThanhToanDayDu', N'DaNhanPhong')
+                  AND NOT (
+                        @tra <= dp.NgayNhanPhong
+                        OR @nhan >= dp.NgayTraPhong
+                      )";
+            conflicts = await conn.ExecuteScalarAsync<int>(conflictNoHold, new { idPhong, nhan = ngayNhanPhong, tra = ngayTraPhong }, tx);
+        }
+
+        if (conflicts > 0)
+            throw new Exception("Phòng vừa được giữ/đặt trong cùng khoảng thời gian. Vui lòng chọn thời gian khác.");
+
+        // 4) Chèn bản ghi đặt phòng
         var sql = @"INSERT INTO DatPhong (IdNguoiDung, IdPhong, NgayDat, NgayNhanPhong, NgayTraPhong, IdTrangThai, CreatedAt, TongTienTamTinh)
                     OUTPUT INSERTED.Id
                     VALUES (@idNguoiDung, @idPhong, GETDATE(), @ngayNhan, @ngayTra, @statusId, GETDATE(), @tong)";
-        return await db.ExecuteScalarAsync<int>(sql, new { idNguoiDung, idPhong, ngayNhan = ngayNhanPhong, ngayTra = ngayTraPhong, statusId, tong = tongTien });
+        var newId = await conn.ExecuteScalarAsync<int>(sql, new { idNguoiDung, idPhong, ngayNhan = ngayNhanPhong, ngayTra = ngayTraPhong, statusId, tong = tongTien }, tx);
+
+        await tx.CommitAsync();
+        return newId;
     }
 
     public async Task<dynamic?> GetByIdAsync(int id)
@@ -120,17 +189,45 @@ public class DatPhongRepository
     public async Task<bool> CheckAvailabilityAsync(int idPhong, DateTime nhan, DateTime tra)
     {
         using var db = _factory.Create();
-        // Trùng lịch nếu đã cọc/đang chờ check-in/đã thanh toán đủ/đã nhận phòng
-        // Các mã trạng thái lấy theo bảng do bạn cung cấp
-        var sql = @"SELECT COUNT(1) FROM DatPhong dp
-                    INNER JOIN TrangThaiDatPhong tt ON dp.IdTrangThai = tt.Id
-                    WHERE dp.IdPhong = @idPhong 
-                    AND tt.MaTrangThai IN (N'DaCoc', N'ChoCheckIn', N'DaThanhToanDayDu', N'DaNhanPhong')
-                    AND NOT (
-                        @tra <= dp.NgayNhanPhong OR -- Trả trước ngày nhận của booking khác
-                        @nhan >= dp.NgayTraPhong    -- Nhận sau ngày trả của booking khác
-                    )";
-        var conflictCount = await db.ExecuteScalarAsync<int>(sql, new { idPhong, nhan, tra });
-        return conflictCount == 0;
+        // Quy tắc chặn trùng lịch:
+        // - Luôn chặn nếu trạng thái đã cọc / chờ check-in / đã thanh toán đủ / đã nhận phòng
+        // - Tạm giữ (hold) khi trạng thái 'ChoThanhToanCoc' TRONG VÒNG 15 PHÚT kể từ khi tạo (CreatedAt)
+        //   → nếu chưa quá 15 phút, coi như đang khoá lịch để chờ thanh toán; quá 15 phút thì bỏ qua.
+
+        var sqlWithHold = @"
+            SELECT COUNT(1)
+            FROM DatPhong dp
+            INNER JOIN TrangThaiDatPhong tt ON dp.IdTrangThai = tt.Id
+            WHERE dp.IdPhong = @idPhong
+              AND (
+                    tt.MaTrangThai IN (N'DaCoc', N'ChoCheckIn', N'DaThanhToanDayDu', N'DaNhanPhong')
+                    OR (tt.MaTrangThai = N'ChoThanhToanCoc' AND dp.CreatedAt >= DATEADD(MINUTE, -15, GETDATE()))
+                  )
+              AND NOT (
+                    @tra <= dp.NgayNhanPhong -- khoảng [nhan,tra) không giao nhau
+                    OR @nhan >= dp.NgayTraPhong
+                  )";
+
+        try
+        {
+            var conflictCount = await db.ExecuteScalarAsync<int>(sqlWithHold, new { idPhong, nhan, tra });
+            return conflictCount == 0;
+        }
+        catch
+        {
+            // Fallback nếu schema không có CreatedAt: bỏ điều kiện hold theo thời gian, chỉ chặn theo các trạng thái cứng
+            var sqlNoHold = @"
+                SELECT COUNT(1)
+                FROM DatPhong dp
+                INNER JOIN TrangThaiDatPhong tt ON dp.IdTrangThai = tt.Id
+                WHERE dp.IdPhong = @idPhong
+                  AND tt.MaTrangThai IN (N'DaCoc', N'ChoCheckIn', N'DaThanhToanDayDu', N'DaNhanPhong')
+                  AND NOT (
+                        @tra <= dp.NgayNhanPhong
+                        OR @nhan >= dp.NgayTraPhong
+                      )";
+            var conflictCount = await db.ExecuteScalarAsync<int>(sqlNoHold, new { idPhong, nhan, tra });
+            return conflictCount == 0;
+        }
     }
 }

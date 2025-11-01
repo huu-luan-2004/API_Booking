@@ -29,20 +29,40 @@
       "PackagePath": "staticwebassets\\uploads\\avatars\\avatar_8_20251024_095223.jpg"
     },
     {
-      "Id": "E:\\Do_an_chuyen_nganh\\API\\hotel-booking-api-dotnet\\wwwroot\\uploads\\rooms\\room_20251026_053343_91580e2b1e054005ba3315530fdfe46d.jpg",
-      "PackagePath": "staticwebassets\\uploads\\rooms\\room_20251026_053343_91580e2b1e054005ba3315530fdfe46d.jpg"
+      "Id": "E:\\Do_an_chuyen_nganh\\API\\hotel-booking-api-dotnet\\wwwroot\\uploads\\rooms\\room_10_20251031_052116.webp",
+      "PackagePath": "staticwebassets\\uploads\\rooms\\room_10_20251031_052116.webp"
     },
     {
-      "Id": "E:\\Do_an_chuyen_nganh\\API\\hotel-booking-api-dotnet\\wwwroot\\uploads\\rooms\\room_25_20251026_055622.jpg",
-      "PackagePath": "staticwebassets\\uploads\\rooms\\room_25_20251026_055622.jpg"
+      "Id": "E:\\Do_an_chuyen_nganh\\API\\hotel-booking-api-dotnet\\wwwroot\\uploads\\rooms\\room_23_20251031_052027.webp",
+      "PackagePath": "staticwebassets\\uploads\\rooms\\room_23_20251031_052027.webp"
     },
     {
-      "Id": "E:\\Do_an_chuyen_nganh\\API\\hotel-booking-api-dotnet\\wwwroot\\uploads\\rooms\\room_26_20251026_052106.jpg",
-      "PackagePath": "staticwebassets\\uploads\\rooms\\room_26_20251026_052106.jpg"
+      "Id": "E:\\Do_an_chuyen_nganh\\API\\hotel-booking-api-dotnet\\wwwroot\\uploads\\rooms\\room_24_20251031_051126.webp",
+      "PackagePath": "staticwebassets\\uploads\\rooms\\room_24_20251031_051126.webp"
     },
     {
-      "Id": "E:\\Do_an_chuyen_nganh\\API\\hotel-booking-api-dotnet\\wwwroot\\uploads\\rooms\\room_27_20251026_053814.jpg",
-      "PackagePath": "staticwebassets\\uploads\\rooms\\room_27_20251026_053814.jpg"
+      "Id": "E:\\Do_an_chuyen_nganh\\API\\hotel-booking-api-dotnet\\wwwroot\\uploads\\rooms\\room_25_20251031_052039.webp",
+      "PackagePath": "staticwebassets\\uploads\\rooms\\room_25_20251031_052039.webp"
+    },
+    {
+      "Id": "E:\\Do_an_chuyen_nganh\\API\\hotel-booking-api-dotnet\\wwwroot\\uploads\\rooms\\room_26_20251031_052016.jpg",
+      "PackagePath": "staticwebassets\\uploads\\rooms\\room_26_20251031_052016.jpg"
+    },
+    {
+      "Id": "E:\\Do_an_chuyen_nganh\\API\\hotel-booking-api-dotnet\\wwwroot\\uploads\\rooms\\room_27_20251031_051144.jpg",
+      "PackagePath": "staticwebassets\\uploads\\rooms\\room_27_20251031_051144.jpg"
+    },
+    {
+      "Id": "E:\\Do_an_chuyen_nganh\\API\\hotel-booking-api-dotnet\\wwwroot\\uploads\\rooms\\room_28_20251031_051219.webp",
+      "PackagePath": "staticwebassets\\uploads\\rooms\\room_28_20251031_051219.webp"
+    },
+    {
+      "Id": "E:\\Do_an_chuyen_nganh\\API\\hotel-booking-api-dotnet\\wwwroot\\uploads\\rooms\\room_8_20251031_052414.webp",
+      "PackagePath": "staticwebassets\\uploads\\rooms\\room_8_20251031_052414.webp"
+    },
+    {
+      "Id": "E:\\Do_an_chuyen_nganh\\API\\hotel-booking-api-dotnet\\wwwroot\\uploads\\rooms\\room_9_20251031_052358.webp",
+      "PackagePath": "staticwebassets\\uploads\\rooms\\room_9_20251031_052358.webp"
     },
     {
       "Id": "obj\\Debug\\net8.0\\staticwebassets\\msbuild.HotelBooking.Api.Microsoft.AspNetCore.StaticWebAssets.props",
