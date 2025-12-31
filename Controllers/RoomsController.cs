@@ -13,8 +13,7 @@ public class RoomsController : ControllerBase
     private readonly PhongRepository _repo;
     private readonly KhuyenMaiRepository _kmRepo;
     private readonly CoSoLuuTruRepository _cslRepo;
-    private readonly HotelBookingApi.Services.FirebaseStorageService _storage;
-    public RoomsController(PhongRepository repo, KhuyenMaiRepository kmRepo, CoSoLuuTruRepository cslRepo, HotelBookingApi.Services.FirebaseStorageService storage) { _repo = repo; _kmRepo = kmRepo; _cslRepo = cslRepo; _storage = storage; }
+    public RoomsController(PhongRepository repo, KhuyenMaiRepository kmRepo, CoSoLuuTruRepository cslRepo) { _repo = repo; _kmRepo = kmRepo; _cslRepo = cslRepo; }
 
     [HttpGet]
     public async Task<IActionResult> List([FromQuery] int page=1, [FromQuery] int pageSize=20, [FromQuery] string? q=null, [FromQuery] int? accommodationId = null, [FromQuery] int? cosoluutru_id = null)
@@ -160,10 +159,14 @@ public class RoomsController : ControllerBase
             var file = form.Files["file"] ?? form.Files["image"] ?? form.Files.FirstOrDefault();
             if (file != null && file.Length > 0)
             {
-                // Validate file type
-                var allowedTypes = new[] { "image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp" };
-                if (!allowedTypes.Contains(file.ContentType.ToLower()))
-                    return BadRequest(new { success = false, message = "Chỉ hỗ trợ file ảnh (JPEG, PNG, GIF, WebP)" });
+                // Validate file type: chấp nhận mọi loại ảnh hoặc dựa trên phần mở rộng nếu Content-Type không phải image/*
+                if (string.IsNullOrWhiteSpace(file.ContentType) || !file.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+                {
+                    var ext = Path.GetExtension(file.FileName)?.ToLowerInvariant();
+                    var allowedExt = new[] { ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".svg", ".heic", ".heif", ".jfif" };
+                    if (string.IsNullOrEmpty(ext) || !allowedExt.Contains(ext))
+                        return BadRequest(new { success = false, message = "File phải là ảnh (image/* hoặc phần mở rộng ảnh phổ biến)" });
+                }
 
                 // Validate file size (max 10MB)
                 if (file.Length > 10 * 1024 * 1024)
@@ -291,10 +294,14 @@ public class RoomsController : ControllerBase
         if (file == null || file.Length == 0)
             return BadRequest(new { success=false, message="Cần upload file ảnh" });
 
-        // Validate file type
-        var allowedTypes = new[] { "image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp" };
-        if (!allowedTypes.Contains(file.ContentType.ToLower()))
-            return BadRequest(new { success = false, message = "Chỉ hỗ trợ file ảnh (JPEG, PNG, GIF, WebP)" });
+        // Validate file type: chấp nhận mọi loại ảnh hoặc dựa trên phần mở rộng nếu Content-Type không phải image/*
+        if (string.IsNullOrWhiteSpace(file.ContentType) || !file.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+        {
+            var ext = Path.GetExtension(file.FileName)?.ToLowerInvariant();
+            var allowedExt = new[] { ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".svg", ".heic", ".heif", ".jfif" };
+            if (string.IsNullOrEmpty(ext) || !allowedExt.Contains(ext))
+                return BadRequest(new { success = false, message = "File phải là ảnh (image/* hoặc phần mở rộng ảnh phổ biến)" });
+        }
 
         // Validate file size (max 10MB)
         if (file.Length > 10 * 1024 * 1024)

@@ -211,7 +211,19 @@ public class DatPhongRepository
         try
         {
             var conflictCount = await db.ExecuteScalarAsync<int>(sqlWithHold, new { idPhong, nhan, tra });
-            return conflictCount == 0;
+            // Bổ sung: Kiểm tra hold chủ động từ bảng PreBookingHold
+            int holdCnt = 0;
+            try
+            {
+                var holdSql = @"
+                    SELECT COUNT(1)
+                    FROM PreBookingHold
+                    WHERE IdPhong=@idPhong AND ExpiresAt > GETDATE()
+                      AND NOT (@tra <= NgayNhanPhong OR @nhan >= NgayTraPhong)";
+                holdCnt = await db.ExecuteScalarAsync<int>(holdSql, new { idPhong, nhan, tra });
+            }
+            catch { }
+            return (conflictCount + holdCnt) == 0;
         }
         catch
         {
@@ -227,7 +239,261 @@ public class DatPhongRepository
                         OR @nhan >= dp.NgayTraPhong
                       )";
             var conflictCount = await db.ExecuteScalarAsync<int>(sqlNoHold, new { idPhong, nhan, tra });
-            return conflictCount == 0;
+            int holdCnt = 0;
+            try
+            {
+                var holdSql = @"
+                    SELECT COUNT(1)
+                    FROM PreBookingHold
+                    WHERE IdPhong=@idPhong AND ExpiresAt > GETDATE()
+                      AND NOT (@tra <= NgayNhanPhong OR @nhan >= NgayTraPhong)";
+                holdCnt = await db.ExecuteScalarAsync<int>(holdSql, new { idPhong, nhan, tra });
+            }
+            catch { }
+            return (conflictCount + holdCnt) == 0;
+        }
+    }
+
+    // Xoá các đơn đặt phòng chưa thanh toán đã quá thời gian giữ chỗ (mặc định 15 phút)
+    // Điều kiện xoá:
+    // - Trạng thái 'ChoThanhToanCoc'
+    // - CreatedAt < NOW - @minutes
+    // - Chưa có giao dịch thanh toán thành công liên quan
+    public async Task<int> PurgeExpiredUnpaidAsync(int minutes = 15)
+    {
+        using var db = _factory.Create();
+        var sql = @"
+            DELETE dp
+            FROM DatPhong dp
+            LEFT JOIN TrangThaiDatPhong tt ON dp.IdTrangThai = tt.Id
+            LEFT JOIN (
+                SELECT DISTINCT IdDatPhong
+                FROM ThanhToan
+                WHERE TrangThai = N'Thành công'
+            ) pay ON pay.IdDatPhong = dp.Id
+            WHERE tt.MaTrangThai = N'ChoThanhToanCoc'
+              AND dp.CreatedAt < DATEADD(MINUTE, -@minutes, GETDATE())
+              AND pay.IdDatPhong IS NULL";
+        try
+        {
+            var affected = await db.ExecuteAsync(sql, new { minutes });
+            return affected;
+        }
+        catch
+        {
+            // Nếu schema khác (không có CreatedAt hoặc cột TrangThai dạng text), thử bản fall-back:
+            var sqlFallback = @"
+                DELETE dp
+                FROM DatPhong dp
+                LEFT JOIN TrangThaiDatPhong tt ON dp.IdTrangThai = tt.Id
+                LEFT JOIN (
+                    SELECT DISTINCT IdDatPhong FROM ThanhToan WHERE TrangThai = N'Thành công'
+                ) pay ON pay.IdDatPhong = dp.Id
+                WHERE (tt.MaTrangThai = N'ChoThanhToanCoc' OR tt.TenTrangThai = N'Chờ thanh toán cọc')
+                  AND pay.IdDatPhong IS NULL";
+            return await db.ExecuteAsync(sqlFallback);
+        }
+    }
+
+    // Lấy danh sách đặt phòng với phân trang và bộ lọc
+    public async Task<(IEnumerable<dynamic> bookings, int total)> ListAsync(int page = 1, int pageSize = 20, string? status = null, int? userId = null)
+    {
+        using var db = _factory.Create();
+        
+        try 
+        {
+            // Đơn giản hóa query để debug - chỉ lấy từ DatPhong
+            var whereClause = "WHERE 1=1";
+            var param = new DynamicParameters();
+            
+            // Filter theo user ID nếu có
+            if (userId.HasValue)
+            {
+                whereClause += " AND IdNguoiDung = @UserId";
+                param.Add("UserId", userId.Value);
+            }
+            
+            // Count total records
+            var countSql = $"SELECT COUNT(*) FROM DatPhong {whereClause}";
+            var total = await db.QuerySingleAsync<int>(countSql, param);
+            
+            // Get paginated data - sử dụng query đơn giản
+            var offset = (page - 1) * pageSize;
+            param.Add("Offset", offset);
+            param.Add("PageSize", pageSize);
+            
+            var dataSql = $@"SELECT Id, IdPhong, IdNguoiDung, NgayNhanPhong, NgayTraPhong, 
+                            TongTienTamTinh as TongTien, IdTrangThai as TrangThai, NgayDat
+                            FROM DatPhong 
+                            {whereClause}
+                            ORDER BY Id DESC
+                            OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY";
+            
+            var bookings = await db.QueryAsync(dataSql, param);
+            return (bookings, total);
+        }
+        catch (Exception ex)
+        {
+            // Log error và return empty thay vì crash
+            System.Diagnostics.Debug.WriteLine($"DatPhong ListAsync error: {ex.Message}");
+            return (new List<dynamic>(), 0);
+        }
+    }
+
+    // Lấy danh sách đặt phòng với thông tin chi tiết cho Admin
+    public async Task<(IEnumerable<dynamic> bookings, int total)> ListWithDetailsAsync(int page = 1, int pageSize = 50, string? status = null, int? userId = null, int? accommodationId = null)
+    {
+        using var db = _factory.Create();
+        
+        try 
+        {
+            var whereClause = "WHERE 1=1";
+            var param = new DynamicParameters();
+            
+            // Filters
+            if (userId.HasValue)
+            {
+                whereClause += " AND dp.IdNguoiDung = @UserId";
+                param.Add("UserId", userId.Value);
+            }
+            
+            if (!string.IsNullOrEmpty(status))
+            {
+                whereClause += " AND (tt.MaTrangThai = @Status OR tt.TenTrangThai = @Status OR CAST(dp.IdTrangThai AS NVARCHAR) = @Status)";
+                param.Add("Status", status);
+            }
+            
+            if (accommodationId.HasValue)
+            {
+                whereClause += " AND p.IdCoSoLuuTru = @AccommodationId";
+                param.Add("AccommodationId", accommodationId.Value);
+            }
+            
+            // Count total records
+            var countSql = $@"
+                SELECT COUNT(*) 
+                FROM DatPhong dp
+                LEFT JOIN TrangThaiDatPhong tt ON dp.IdTrangThai = tt.Id
+                LEFT JOIN Phong p ON dp.IdPhong = p.Id
+                {whereClause}";
+            var total = await db.QuerySingleAsync<int>(countSql, param);
+            
+            // Get paginated data with joins
+            var offset = (page - 1) * pageSize;
+            param.Add("Offset", offset);
+            param.Add("PageSize", pageSize);
+            
+            var dataSql = $@"
+                SELECT 
+                    dp.Id, dp.IdPhong, dp.IdNguoiDung, dp.NgayNhanPhong, dp.NgayTraPhong,
+                    dp.TongTienTamTinh as TongTien, dp.NgayDat, dp.GhiChu, dp.CreatedAt, dp.UpdatedAt,
+                    dp.IdTrangThai, 
+                    tt.MaTrangThai as TT_MaTrangThai, tt.TenTrangThai as TT_TenTrangThai,
+                    
+                    -- Thông tin khách hàng
+                    nd.HoTen as ND_HoTen, nd.Email as ND_Email, nd.SoDienThoai as ND_SoDienThoai, 
+                    nd.Avatar as ND_Avatar, nd.NgayTao as ND_NgayTao, nd.TrangThai as ND_TrangThai,
+                    
+                    -- Thông tin phòng
+                    p.TenPhong as P_TenPhong, p.LoaiPhong as P_LoaiPhong, p.DienTich as P_DienTich,
+                    p.SoLuongKhach as P_SoLuongKhach, p.Gia as P_Gia, p.MoTa as P_MoTa, p.HinhAnh as P_HinhAnh,
+                    p.IdCoSoLuuTru,
+                    
+                    -- Thông tin cơ sở lưu trú
+                    cs.TenCoSo as CS_TenCoSo, cs.DiaChi as CS_DiaChi, cs.SoDienThoai as CS_SoDienThoai,
+                    cs.Email as CS_Email, cs.Website as CS_Website, cs.MoTa as CS_MoTa,
+                    
+                    -- Thông tin thanh toán (nếu có)
+                    CASE WHEN EXISTS (SELECT 1 FROM ThanhToan tt2 WHERE tt2.IdDatPhong = dp.Id AND tt2.TrangThai = N'Thành công') 
+                         THEN 1 ELSE 0 END as DaThanhToan,
+                    (SELECT TOP 1 PhuongThucThanhToan FROM ThanhToan tt3 WHERE tt3.IdDatPhong = dp.Id ORDER BY NgayThanhToan DESC) as PhuongThucThanhToan,
+                    (SELECT TOP 1 NgayThanhToan FROM ThanhToan tt4 WHERE tt4.IdDatPhong = dp.Id AND tt4.TrangThai = N'Thành công' ORDER BY NgayThanhToan DESC) as NgayThanhToan
+                FROM DatPhong dp
+                LEFT JOIN TrangThaiDatPhong tt ON dp.IdTrangThai = tt.Id
+                LEFT JOIN NguoiDung nd ON dp.IdNguoiDung = nd.Id
+                LEFT JOIN Phong p ON dp.IdPhong = p.Id
+                LEFT JOIN CoSoLuuTru cs ON p.IdCoSoLuuTru = cs.Id
+                {whereClause}
+                ORDER BY dp.Id DESC
+                OFFSET @Offset ROWS FETCH NEXT @PageSize ROWS ONLY";
+            
+            var bookings = await db.QueryAsync(dataSql, param);
+            return (bookings, total);
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"DatPhong ListWithDetailsAsync error: {ex.Message}");
+            return (new List<dynamic>(), 0);
+        }
+    }
+
+    // Lấy chi tiết một booking với đầy đủ thông tin
+    public async Task<dynamic?> GetByIdWithFullDetailsAsync(int id)
+    {
+        using var db = _factory.Create();
+        
+        try
+        {
+            var sql = @"
+                SELECT 
+                    dp.Id, dp.IdPhong, dp.IdNguoiDung, dp.NgayNhanPhong, dp.NgayTraPhong,
+                    dp.TongTienTamTinh as TongTien, dp.NgayDat, dp.GhiChu, dp.CreatedAt, dp.UpdatedAt,
+                    dp.IdTrangThai, 
+                    tt.MaTrangThai as TT_MaTrangThai, tt.TenTrangThai as TT_TenTrangThai,
+                    
+                    -- Thông tin khách hàng
+                    nd.HoTen as ND_HoTen, nd.Email as ND_Email, nd.SoDienThoai as ND_SoDienThoai, 
+                    nd.Avatar as ND_Avatar, nd.NgayTao as ND_NgayTao, nd.TrangThai as ND_TrangThai,
+                    
+                    -- Thông tin phòng
+                    p.TenPhong as P_TenPhong, p.LoaiPhong as P_LoaiPhong, p.DienTich as P_DienTich,
+                    p.SoLuongKhach as P_SoLuongKhach, p.Gia as P_Gia, p.MoTa as P_MoTa, p.HinhAnh as P_HinhAnh,
+                    p.IdCoSoLuuTru,
+                    
+                    -- Thông tin cơ sở lưu trú
+                    cs.TenCoSo as CS_TenCoSo, cs.DiaChi as CS_DiaChi, cs.SoDienThoai as CS_SoDienThoai,
+                    cs.Email as CS_Email, cs.Website as CS_Website, cs.MoTa as CS_MoTa
+                FROM DatPhong dp
+                LEFT JOIN TrangThaiDatPhong tt ON dp.IdTrangThai = tt.Id
+                LEFT JOIN NguoiDung nd ON dp.IdNguoiDung = nd.Id
+                LEFT JOIN Phong p ON dp.IdPhong = p.Id
+                LEFT JOIN CoSoLuuTru cs ON p.IdCoSoLuuTru = cs.Id
+                WHERE dp.Id = @Id";
+            
+            return await db.QueryFirstOrDefaultAsync(sql, new { Id = id });
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"DatPhong GetByIdWithFullDetailsAsync error: {ex.Message}");
+            return null;
+        }
+    }
+
+    // Lấy thống kê trạng thái booking cho Admin
+    public async Task<dynamic> GetBookingStatusCountsAsync()
+    {
+        using var db = _factory.Create();
+        
+        try
+        {
+            var sql = @"
+                SELECT 
+                    tt.MaTrangThai,
+                    tt.TenTrangThai,
+                    COUNT(dp.Id) as SoLuong,
+                    SUM(dp.TongTienTamTinh) as TongTien
+                FROM TrangThaiDatPhong tt
+                LEFT JOIN DatPhong dp ON tt.Id = dp.IdTrangThai
+                GROUP BY tt.Id, tt.MaTrangThai, tt.TenTrangThai
+                ORDER BY COUNT(dp.Id) DESC";
+            
+            var results = await db.QueryAsync(sql);
+            return results;
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"DatPhong GetBookingStatusCountsAsync error: {ex.Message}");
+            return new List<dynamic>();
         }
     }
 }

@@ -18,8 +18,187 @@ public class BookingsController : ControllerBase
         _repo = repo; _rooms = rooms; _cancelRepo = cancelRepo; _payRepo = payRepo;
     }
 
-    [HttpGet]
+    [HttpGet("health")]
     public IActionResult Health() => Ok(new { success=true, message="API đặt phòng hoạt động" });
+
+    // API đơn giản cho Admin - chỉ lấy danh sách booking với thông tin cơ bản
+    [HttpGet("admin/simple")]
+    public async Task<IActionResult> AdminSimpleList([FromQuery] int page = 1, [FromQuery] int pageSize = 50)
+    {
+        try 
+        {
+            var (bookings, total) = await _repo.ListAsync(page, pageSize, null, null);
+            
+            return Ok(new { 
+                success = true, 
+                message = "Danh sách đặt phòng cho Admin (đơn giản)", 
+                data = new { 
+                    items = bookings.Select(b => new {
+                        id = b.Id,
+                        idPhong = b.IdPhong,
+                        idNguoiDung = b.IdNguoiDung,
+                        ngayNhanPhong = b.NgayNhanPhong,
+                        ngayTraPhong = b.NgayTraPhong,
+                        tongTien = b.TongTien,
+                        trangThai = b.TrangThai,
+                        ngayDat = b.NgayDat,
+                        ghiChu = b.GhiChu
+                    }),
+                    total, 
+                    page, 
+                    pageSize
+                } 
+            });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { 
+                success = false, 
+                message = "Lỗi server", 
+                error = ex.Message,
+                stackTrace = ex.StackTrace?.Split('\n').Take(5).ToArray()
+            });
+        }
+    }
+
+    // API lấy chi tiết một booking cho Admin (không cần auth để test)
+    [HttpGet("detail/{id}")]
+    public async Task<IActionResult> GetBookingDetail(int id)
+    {
+        try 
+        {
+            // Sử dụng method GetByIdAsync có sẵn
+            var booking = await _repo.GetByIdAsync(id);
+            
+            if (booking == null)
+                return NotFound(new { success = false, message = "Không tìm thấy booking với ID này" });
+            
+            return Ok(new { 
+                success = true, 
+                message = "Chi tiết booking", 
+                data = new {
+                    // Thông tin cơ bản
+                    id = booking.Id,
+                    idPhong = booking.IdPhong,
+                    idNguoiDung = booking.IdNguoiDung,
+                    ngayNhanPhong = booking.NgayNhanPhong,
+                    ngayTraPhong = booking.NgayTraPhong,
+                    tongTien = booking.TongTienTamTinh ?? booking.TongTien,
+                    ngayDat = booking.NgayDat,
+                    ghiChu = booking.GhiChu?.ToString(),
+                    createdAt = booking.CreatedAt,
+                    
+                    // Thông tin trạng thái
+                    trangThai = new {
+                        id = booking.IdTrangThai,
+                        ma = booking.TT_MaTrangThai,
+                        ten = booking.TT_TenTrangThai
+                    },
+                    
+                    // Thông tin khách hàng  
+                    khachHang = new {
+                        id = booking.IdNguoiDung,
+                        hoTen = booking.ND_HoTen,
+                        email = booking.ND_Email,
+                        soDienThoai = booking.ND_SoDienThoai
+                    },
+                    
+                    // Thông tin phòng
+                    phong = new {
+                        id = booking.IdPhong,
+                        tenPhong = booking.P_TenPhong,
+                        loaiPhong = booking.P_LoaiPhong,
+                        gia = booking.P_Gia
+                    },
+                    
+                    // Thông tin cơ sở
+                    coSoLuuTru = new {
+                        tenCoSo = booking.CS_TenCoSo,
+                        diaChi = booking.CS_DiaChi
+                    }
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { 
+                success = false, 
+                message = "Lỗi server khi lấy chi tiết booking", 
+                error = ex.Message
+            });
+        }
+    }
+
+    // API thống kê cho Admin
+    [HttpGet("admin/stats")]
+    public async Task<IActionResult> AdminStats()
+    {
+        try 
+        {
+            // Lấy thống kê cơ bản
+            var statusCounts = await _repo.GetBookingStatusCountsAsync();
+            var (allBookings, total) = await _repo.ListAsync(1, 1000); // Lấy tất cả để thống kê
+            
+            return Ok(new { 
+                success = true, 
+                message = "Thống kê booking cho Admin", 
+                data = new {
+                    totalBookings = total,
+                    statusCounts = statusCounts,
+                    recentBookings = allBookings.Take(5).Select(b => new {
+                        id = b.Id,
+                        idNguoiDung = b.IdNguoiDung,
+                        tongTien = b.TongTien,
+                        ngayDat = b.NgayDat,
+                        trangThai = b.TrangThai
+                    })
+                }
+            });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { 
+                success = false, 
+                message = "Lỗi server khi lấy thống kê", 
+                error = ex.Message
+            });
+        }
+    }
+
+    // GET /api/bookings - Lấy danh sách đặt phòng với phân trang
+    [HttpGet]
+    public async Task<IActionResult> List([FromQuery] int page = 1, [FromQuery] int pageSize = 20, [FromQuery] string? status = null, [FromQuery] int? userId = null)
+    {
+        try 
+        {
+            var (bookings, total) = await _repo.ListAsync(page, pageSize, status, userId);
+            
+            return Ok(new { 
+                success = true, 
+                message = "Danh sách đặt phòng", 
+                data = new { 
+                    items = bookings.Select(b => new {
+                        id = b.Id,
+                        idPhong = b.IdPhong,
+                        idNguoiDung = b.IdNguoiDung,
+                        ngayNhanPhong = b.NgayNhanPhong,
+                        ngayTraPhong = b.NgayTraPhong,
+                        tongTien = b.TongTien,
+                        trangThai = b.TrangThai?.ToString(),
+                        ngayDat = b.NgayDat,
+                        ghiChu = b.GhiChu?.ToString()
+                    }),
+                    total, 
+                    page, 
+                    pageSize 
+                } 
+            });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { success = false, message = "Lỗi server khi lấy danh sách đặt phòng", error = ex.Message });
+        }
+    }
 
     // DTO để nhận request tạo đặt phòng (tránh dùng dynamic gây lỗi RuntimeBinder với JsonElement)
     public class CreateBookingRequest
@@ -34,6 +213,8 @@ public class BookingsController : ControllerBase
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateBookingRequest body)
     {
+        // Dọn rác các đơn giữ chỗ đã hết hạn & chưa thanh toán để tránh chiếm lịch
+        try { await _repo.PurgeExpiredUnpaidAsync(15); } catch { }
         if (!int.TryParse(User?.FindFirst("id")?.Value, out var idNguoiDung))
             return Unauthorized(new { success=false, message="Vui lòng đăng nhập để đặt phòng" });
 
@@ -133,6 +314,22 @@ public class BookingsController : ControllerBase
         return StatusCode(201, new { success=true, message="Đặt phòng thành công", data = response });
     }
 
+    // Admin: chạy dọn rác đơn chưa thanh toán (hết hạn giữ chỗ)
+    [Authorize(Roles="Admin")]
+    [HttpPost("cleanup-unpaid")]
+    public async Task<IActionResult> CleanupUnpaid([FromQuery] int minutes = 15)
+    {
+        try
+        {
+            var affected = await _repo.PurgeExpiredUnpaidAsync(minutes);
+            return Ok(new { success = true, message = "Đã xoá đơn chưa thanh toán hết hạn", data = new { affected, minutes } });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { success=false, message="Lỗi server khi dọn rác đơn chưa thanh toán", error = ex.Message });
+        }
+    }
+
     [Authorize]
     [HttpGet("user")]
     public async Task<IActionResult> UserBookings()
@@ -140,6 +337,136 @@ public class BookingsController : ControllerBase
         int idNguoiDung = int.Parse(User.FindFirst("id")!.Value);
         var bookings = await _repo.ListByUserAsync(idNguoiDung);
         return Ok(new { success=true, message="Lấy danh sách đặt phòng thành công", data = bookings });
+    }
+
+    // API chuyên dụng cho Admin để xem danh sách đặt phòng với đầy đủ thông tin
+    // [Authorize(Roles = "Admin")] // Tạm comment để test
+    [HttpGet("admin/all")]
+    public async Task<IActionResult> AdminGetAllBookings([FromQuery] int page = 1, [FromQuery] int pageSize = 50, [FromQuery] string? status = null, [FromQuery] int? userId = null)
+    {
+        try 
+        {
+            // Sử dụng ListAsync đơn giản trước để đảm bảo hoạt động
+            var (bookings, total) = await _repo.ListAsync(page, pageSize, status, userId);
+            
+            return Ok(new { 
+                success = true, 
+                message = "Danh sách đặt phòng cho Admin", 
+                data = new { 
+                    items = bookings.Select(b => new {
+                        // Thông tin đặt phòng cơ bản
+                        id = b.Id,
+                        idPhong = b.IdPhong,
+                        idNguoiDung = b.IdNguoiDung,
+                        ngayNhanPhong = b.NgayNhanPhong,
+                        ngayTraPhong = b.NgayTraPhong,
+                        tongTien = b.TongTien,
+                        ngayDat = b.NgayDat,
+                        trangThaiId = b.TrangThai,
+                        ghiChu = b.GhiChu?.ToString()
+                    }),
+                    total, 
+                    page, 
+                    pageSize,
+                    summary = new {
+                        totalBookings = total,
+                        statusCounts = await _repo.GetBookingStatusCountsAsync()
+                    }
+                } 
+            });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { success = false, message = "Lỗi server khi lấy danh sách đặt phòng cho Admin", error = ex.Message, stackTrace = ex.StackTrace });
+        }
+    }
+
+    // API cho Admin để xem chi tiết một booking cụ thể
+    // [Authorize(Roles = "Admin")] // Tạm comment để test
+    [HttpGet("admin/{id}")]
+    public async Task<IActionResult> AdminGetBookingDetail(int id)
+    {
+        try
+        {
+            var booking = await _repo.GetByIdWithFullDetailsAsync(id);
+            if (booking == null)
+                return NotFound(new { success = false, message = "Không tìm thấy đặt phòng" });
+
+            // Lấy thêm lịch sử thanh toán
+            var payments = await _payRepo.GetByBookingIdAsync(id);
+            
+            var result = new {
+                // Thông tin đặt phòng
+                id = booking.Id,
+                idPhong = booking.IdPhong,
+                idNguoiDung = booking.IdNguoiDung,
+                ngayNhanPhong = booking.NgayNhanPhong,
+                ngayTraPhong = booking.NgayTraPhong,
+                tongTien = booking.TongTien,
+                ngayDat = booking.NgayDat,
+                ghiChu = booking.GhiChu?.ToString(),
+                createdAt = booking.CreatedAt,
+                updatedAt = booking.UpdatedAt,
+                
+                // Thông tin trạng thái
+                trangThai = new {
+                    id = booking.IdTrangThai,
+                    ma = booking.TT_MaTrangThai,
+                    ten = booking.TT_TenTrangThai
+                },
+                
+                // Thông tin khách hàng đầy đủ
+                khachHang = new {
+                    id = booking.IdNguoiDung,
+                    hoTen = booking.ND_HoTen,
+                    email = booking.ND_Email,
+                    soDienThoai = booking.ND_SoDienThoai,
+                    avatar = booking.ND_Avatar,
+                    ngayTao = booking.ND_NgayTao,
+                    trangThai = booking.ND_TrangThai
+                },
+                
+                // Thông tin phòng đầy đủ
+                phong = new {
+                    id = booking.IdPhong,
+                    tenPhong = booking.P_TenPhong,
+                    loaiPhong = booking.P_LoaiPhong,
+                    dienTich = booking.P_DienTich,
+                    soLuongKhach = booking.P_SoLuongKhach,
+                    gia = booking.P_Gia,
+                    moTa = booking.P_MoTa,
+                    hinhAnh = booking.P_HinhAnh
+                },
+                
+                // Thông tin cơ sở lưu trú đầy đủ
+                coSoLuuTru = new {
+                    id = booking.IdCoSoLuuTru,
+                    tenCoSo = booking.CS_TenCoSo,
+                    diaChi = booking.CS_DiaChi,
+                    soDienThoai = booking.CS_SoDienThoai,
+                    email = booking.CS_Email,
+                    website = booking.CS_Website,
+                    moTa = booking.CS_MoTa
+                },
+                
+                // Lịch sử thanh toán
+                lichSuThanhToan = payments?.Select(p => new {
+                    id = p.Id,
+                    soTien = p.SoTien,
+                    phuongThuc = p.PhuongThuc ?? p.PhuongThucThanhToan,
+                    ngayThanhToan = p.NgayThanhToan,
+                    trangThai = p.TrangThai,
+                    maGiaoDich = p.MaGiaoDich ?? p.MaGiaoDichVnPay,
+                    ghiChu = p.GhiChu
+                }).ToArray() ?? new object[0]
+            };
+
+            return Ok(new { success = true, message = "Chi tiết đặt phòng", data = result });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { success = false, message = "Lỗi server khi lấy chi tiết đặt phòng", error = ex.Message });
+        }
     }
 
     [HttpGet("check-availability")]

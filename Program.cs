@@ -1,7 +1,5 @@
 using HotelBookingApi.Data;
 using HotelBookingApi.Services;
-using FirebaseAdmin;
-using Google.Apis.Auth.OAuth2;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.AspNetCore.StaticFiles;
@@ -11,13 +9,6 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Config
 var config = builder.Configuration;
-
-// Firebase Admin init
-var saPath = config["FIREBASE_SERVICE_ACCOUNT_PATH"];
-if (!string.IsNullOrWhiteSpace(saPath))
-{
-    FirebaseApp.Create(new AppOptions { Credential = GoogleCredential.FromFile(saPath) });
-}
 
 // Add services to the container.
 builder.Services.AddControllers();
@@ -29,15 +20,20 @@ builder.Services.AddScoped<CoSoLuuTruRepository>();
 builder.Services.AddScoped<PhongRepository>();
 builder.Services.AddScoped<DatPhongRepository>();
 builder.Services.AddScoped<ThanhToanRepository>();
+builder.Services.AddScoped<PreBookingHoldRepository>();
 builder.Services.AddScoped<HuyDatPhongRepository>();
 builder.Services.AddScoped<KhuyenMaiRepository>();
+builder.Services.AddScoped<SystemSettingsRepository>();
+builder.Services.AddScoped<DanhGiaRepository>();
 
-// Add Firebase and JWT services
-builder.Services.AddSingleton<FirebaseService>();
+// Add services
 builder.Services.AddSingleton<JwtService>();
-builder.Services.AddSingleton<FirebaseStorageService>();
 builder.Services.AddHttpClient<OpenStreetMapService>();
 builder.Services.AddSingleton<VnPayService>();
+builder.Services.AddScoped<GoogleAuthService>();
+
+// Add Database Authentication Service
+builder.Services.AddScoped<AuthService>();
 
 // JWT authentication
 var jwtSecret = config["JWT_SECRET"] ?? "your_jwt_secret_key";

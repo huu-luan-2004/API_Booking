@@ -211,7 +211,33 @@ public class CoSoLuuTruController : ControllerBase
         if (Request.HasFormContentType)
         {
             var form = await Request.ReadFormAsync();
-            tenCoSo = form["tenCoSo"].FirstOrDefault();
+            // Đọc tên cơ sở với nhiều khóa tương thích
+            tenCoSo = form["tenCoSo"].FirstOrDefault()
+                      ?? form["ten_co_so"].FirstOrDefault()
+                      ?? form["tenCoSoLuuTru"].FirstOrDefault()
+                      ?? form["ten"].FirstOrDefault()
+                      ?? form["name"].FirstOrDefault()
+                      ?? form["tenCoso"].FirstOrDefault();
+            if (string.IsNullOrWhiteSpace(tenCoSo))
+            {
+                // Nếu client gửi JSON trong field 'data' / 'payload' / 'meta'
+                var jsonPayload = form["data"].FirstOrDefault()
+                                 ?? form["payload"].FirstOrDefault()
+                                 ?? form["meta"].FirstOrDefault();
+                if (!string.IsNullOrWhiteSpace(jsonPayload))
+                {
+                    try
+                    {
+                        using var doc = JsonDocument.Parse(jsonPayload);
+                        var root = doc.RootElement;
+                        tenCoSo = root.TryGetProperty("tenCoSo", out var p1) && p1.ValueKind == JsonValueKind.String ? p1.GetString() : tenCoSo;
+                        tenCoSo ??= (root.TryGetProperty("ten_co_so", out var p2) && p2.ValueKind == JsonValueKind.String) ? p2.GetString() : null;
+                        tenCoSo ??= (root.TryGetProperty("name", out var p3) && p3.ValueKind == JsonValueKind.String) ? p3.GetString() : null;
+                        tenCoSo ??= (root.TryGetProperty("ten", out var p4) && p4.ValueKind == JsonValueKind.String) ? p4.GetString() : null;
+                    }
+                    catch { /* bỏ qua nếu JSON không hợp lệ */ }
+                }
+            }
             moTa = form["moTa"].FirstOrDefault();
             soTaiKhoan = form["soTaiKhoan"].FirstOrDefault();
             tenTaiKhoan = form["tenTaiKhoan"].FirstOrDefault();
@@ -236,10 +262,14 @@ public class CoSoLuuTruController : ControllerBase
             var file = form.Files["file"] ?? form.Files["image"] ?? form.Files.FirstOrDefault();
             if (file != null && file.Length > 0)
             {
-                // Validate file type
-                var allowedTypes = new[] { "image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp" };
-                if (!allowedTypes.Contains(file.ContentType.ToLower()))
-                    return BadRequest(new { success = false, message = "Chỉ hỗ trợ file ảnh (JPEG, PNG, GIF, WebP)" });
+                // Validate file type: chấp nhận mọi loại ảnh hoặc dựa trên phần mở rộng nếu Content-Type không phải image/*
+                if (string.IsNullOrWhiteSpace(file.ContentType) || !file.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+                {
+                    var ext = Path.GetExtension(file.FileName)?.ToLowerInvariant();
+                    var allowedExt = new[] { ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".svg", ".heic", ".heif", ".jfif" };
+                    if (string.IsNullOrEmpty(ext) || !allowedExt.Contains(ext))
+                        return BadRequest(new { success = false, message = "File phải là ảnh (image/* hoặc phần mở rộng ảnh phổ biến)" });
+                }
 
                 // Validate file size (max 10MB)
                 if (file.Length > 10 * 1024 * 1024)
@@ -378,6 +408,60 @@ public class CoSoLuuTruController : ControllerBase
         return StatusCode(201, new { success=true, message="Tạo cơ sở lưu trú thành công, vui lòng chờ admin duyệt", data = csData });
     }
 
+    // Demo endpoint without auth for testing
+    [HttpPost("{id:int}/approve-demo")]
+    public async Task<IActionResult> ApproveDemo([FromRoute] int id)
+    {
+        try
+        {
+            await _repo.SetApprovalStatusAsync(id, "DaDuyet");
+            var cs = await _repo.GetByIdAsync(id);
+            return Ok(new { 
+                success = true, 
+                message = $"✅ ĐÃ DUYỆT cơ sở lưu trú ID {id}", 
+                data = cs,
+                previousStatus = "ChoDuyet",
+                newStatus = "DaDuyet"
+            });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { 
+                success = false, 
+                message = "Lỗi khi duyệt cơ sở", 
+                error = ex.Message 
+            });
+        }
+    }
+
+    // Demo endpoint without auth for testing rejection
+    [HttpPost("{id:int}/reject-demo")]
+    public async Task<IActionResult> RejectDemo([FromRoute] int id)
+    {
+        try
+        {
+            string lyDo = "Cơ sở không đạt tiêu chuẩn duyệt";
+            await _repo.SetApprovalStatusAsync(id, "TuChoi", lyDo);
+            var cs = await _repo.GetByIdAsync(id);
+            return Ok(new { 
+                success = true, 
+                message = $"❌ ĐÃ TỪ CHỐI cơ sở lưu trú ID {id}", 
+                data = cs,
+                previousStatus = "DaDuyet",
+                newStatus = "TuChoi",
+                reason = lyDo
+            });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { 
+                success = false, 
+                message = "Lỗi khi từ chối cơ sở", 
+                error = ex.Message 
+            });
+        }
+    }
+
     [Authorize(Roles="Admin")]
     [HttpPatch("{id:int}/approve")]
     public async Task<IActionResult> Approve([FromRoute] int id)
@@ -455,10 +539,14 @@ public class CoSoLuuTruController : ControllerBase
             {
                 hasNewImage = true;
                 
-                // Validate file type
-                var allowedTypes = new[] { "image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp" };
-                if (!allowedTypes.Contains(file.ContentType.ToLower()))
-                    return BadRequest(new { success = false, message = "Chỉ hỗ trợ file ảnh (JPEG, PNG, GIF, WebP)" });
+                // Validate file type: chấp nhận mọi loại ảnh hoặc dựa trên phần mở rộng nếu Content-Type không phải image/*
+                if (string.IsNullOrWhiteSpace(file.ContentType) || !file.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+                {
+                    var ext = Path.GetExtension(file.FileName)?.ToLowerInvariant();
+                    var allowedExt = new[] { ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".svg", ".heic", ".heif", ".jfif" };
+                    if (string.IsNullOrEmpty(ext) || !allowedExt.Contains(ext))
+                        return BadRequest(new { success = false, message = "File phải là ảnh (image/* hoặc phần mở rộng ảnh phổ biến)" });
+                }
 
                 // Validate file size (max 10MB)
                 if (file.Length > 10 * 1024 * 1024)

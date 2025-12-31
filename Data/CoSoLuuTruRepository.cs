@@ -55,6 +55,7 @@ public class CoSoLuuTruRepository
         add("IdDiaChi", (int?)body?.idDiaChi);
         add("Anh", (string?)body?.anh);
         add("IdNguoiDung", (int?)body?.idNguoiDung);
+        add("TrangThai", 1); // Mặc định hoạt động khi tạo mới
         if (names.Contains("CreatedAt")) add("CreatedAt", DateTime.UtcNow);
         var isIdentity = await db.ExecuteScalarAsync<int>("SELECT COLUMNPROPERTY(OBJECT_ID('dbo.CoSoLuuTru'),'Id','IsIdentity')");
         if (isIdentity != 1) { var nextId = await db.ExecuteScalarAsync<int>("SELECT ISNULL(MAX(Id),0)+1 FROM CoSoLuuTru"); cols.Insert(0,"Id"); vals.Insert(0,"@Id"); p.Add("Id", nextId); }
@@ -102,6 +103,7 @@ public class CoSoLuuTruRepository
         add("TenNganHang", (string?)body?.tenNganHang);
         add("IdDiaChi", (int?)body?.idDiaChi);
         add("Anh", (string?)body?.anh);
+        add("TrangThai", (int?)body?.trangThai);
         if (names.Contains("UpdatedAt")) add("UpdatedAt", DateTime.UtcNow);
 
         if (cols.Any())
@@ -132,10 +134,13 @@ public class CoSoLuuTruRepository
         }
 
         // Chuẩn hoá dữ liệu đầu vào cho schema mới (ChiTiet, Pho, Phuong, Nuoc, KinhDo, ViDo)
-        string? chiTiet = (string?)addressData?.chiTiet ?? (string?)addressData?.soNha; // backward compat
-        string? pho = (string?)addressData?.pho ?? (string?)addressData?.road ?? (string?)addressData?.soNha;
-        string? phuong = (string?)addressData?.phuong;
-        string? nuoc = (string?)addressData?.nuoc ?? (string?)addressData?.country;
+        // Đọc an toàn từ dynamic/anonymous type/IDictionary để tránh RuntimeBinderException
+        string? chiTiet = GetValue<string>(addressData, "chiTiet") ?? GetValue<string>(addressData, "soNha");
+        string? pho     = GetValue<string>(addressData, "pho")
+                  ?? GetValue<string>(addressData, "road")
+                  ?? GetValue<string>(addressData, "soNha");
+        string? phuong  = GetValue<string>(addressData, "phuong");
+        string? nuoc    = GetValue<string>(addressData, "nuoc") ?? GetValue<string>(addressData, "country");
 
         // Mỗi cơ sở lưu trú có 1 địa chỉ độc lập: luôn tạo bản ghi mới, không tái sử dụng IdDiaChi
 
@@ -147,21 +152,14 @@ public class CoSoLuuTruRepository
         ";
 
         // Sanitize ranges and precision to tránh overflow numeric
-        double? kd = (double?)addressData?.kinhDo;
-        double? vd = (double?)addressData?.viDo;
+        double? kd = GetValue<double?>(addressData, "kinhDo");
+        double? vd = GetValue<double?>(addressData, "viDo");
         if (kd.HasValue) kd = Math.Max(-180, Math.Min(180, kd.Value));
         if (vd.HasValue) vd = Math.Max(-90, Math.Min(90, vd.Value));
         decimal? kdDec = kd.HasValue ? Math.Round((decimal)kd.Value, 6) : (decimal?)null;
         decimal? vdDec = vd.HasValue ? Math.Round((decimal)vd.Value, 6) : (decimal?)null;
 
-        var newId = await db.ExecuteScalarAsync<int>(sql, new { 
-            chiTiet,
-            pho,
-            phuong,
-            nuoc,
-            kinhDo = kdDec,
-            viDo = vdDec
-        });
+        var newId = await db.ExecuteScalarAsync<int>(sql, new { chiTiet, pho, phuong, nuoc, kinhDo = kdDec, viDo = vdDec });
 
         return newId;
     }
@@ -192,8 +190,8 @@ public class CoSoLuuTruRepository
         ";
 
         // Sanitize ranges and precision
-        double? kd = (double?)addressData?.kinhDo;
-        double? vd = (double?)addressData?.viDo;
+        double? kd = GetValue<double?>(addressData, "kinhDo");
+        double? vd = GetValue<double?>(addressData, "viDo");
         if (kd.HasValue) kd = Math.Max(-180, Math.Min(180, kd.Value));
         if (vd.HasValue) vd = Math.Max(-90, Math.Min(90, vd.Value));
         decimal? kdDec = kd.HasValue ? Math.Round((decimal)kd.Value, 6) : (decimal?)null;
@@ -201,12 +199,12 @@ public class CoSoLuuTruRepository
 
         await db.ExecuteAsync(sql, new {
             id,
-            chiTiet = (string?)addressData?.chiTiet ?? (string?)addressData?.soNha,
-            pho = (string?)addressData?.pho ?? (string?)addressData?.road ?? (string?)addressData?.soNha,
-            phuong = (string?)addressData?.phuong,
-            nuoc = (string?)addressData?.nuoc ?? (string?)addressData?.country,
-            kinhDo = kdDec,
-            viDo = vdDec
+            chiTiet = GetValue<string>(addressData, "chiTiet") ?? GetValue<string>(addressData, "soNha"),
+            pho     = GetValue<string>(addressData, "pho") ?? GetValue<string>(addressData, "road") ?? GetValue<string>(addressData, "soNha"),
+            phuong  = GetValue<string>(addressData, "phuong"),
+            nuoc    = GetValue<string>(addressData, "nuoc") ?? GetValue<string>(addressData, "country"),
+            kinhDo  = kdDec,
+            viDo    = vdDec
         });
     }
 
@@ -226,5 +224,23 @@ public class CoSoLuuTruRepository
         if (tableExists == 0) return null;
         var rows = await db.QueryAsync("SELECT TOP 1 * FROM DiaChiChiTiet WHERE Id=@id", new { id });
         return rows.FirstOrDefault();
+    }
+
+    private static T? GetValue<T>(object? data, string name)
+    {
+        try
+        {
+            if (data is null) return default;
+            if (data is IDictionary<string, object> dict)
+            {
+                if (dict.TryGetValue(name, out var v)) return (T?)v;
+                return default;
+            }
+            var prop = data.GetType().GetProperty(name);
+            if (prop is null) return default;
+            var val = prop.GetValue(data);
+            return (T?)val;
+        }
+        catch { return default; }
     }
 }
